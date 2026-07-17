@@ -1,0 +1,17 @@
+schema: openpi_petrel_dataset_group_v1
+name: oxe_rpy_variant_06
+category: oxe
+profile: oxe_single_state_rpy_delta_rpy
+format: v2
+root: manip:manip-dataset/public/real/oxe
+fields:
+  video:
+    key: observation.images.image
+  video_concat: single
+datasets:
+- name: bc_z_0.1.0_lerobot
+  path: bc_z_0.1.0_lerobot
+- name: cmu_stretch_0.1.0_lerobot
+  path: cmu_stretch_0.1.0_lerobot
+- name: dlr_edan_shared_control_converted_externally_to_rlds_0.1.0_lerobot
+  path: dlr_edan_shared_control_converted_externally_to_rlds_0.1.0_lerobot

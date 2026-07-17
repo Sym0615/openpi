@@ -1,0 +1,14 @@
+schema: openpi_petrel_dataset_group_v1
+name: oxe_quat
+category: oxe
+profile: oxe_single_state_quat_delta_rpy
+format: v2
+root: manip:manip-dataset/public/real/oxe
+fields:
+  video:
+    keys:
+    - observation.images.image
+  video_concat: single
+datasets:
+- name: fractal20220817_data_0.1.0_lerobot
+  path: fractal20220817_data_0.1.0_lerobot

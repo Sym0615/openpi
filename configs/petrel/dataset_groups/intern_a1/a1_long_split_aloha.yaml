@@ -1,0 +1,71 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_long_split_aloha
+category: intern_a1
+profile: a1_dual_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/long_horizon_tasks/split_aloha
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand_left
+    - images.rgb.hand_right
+  video_concat: robotwin
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - -1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: clean_the_dirt_with_brown_cloth_left_arm
+  path: clean_the_dirt_with_brown_cloth_left_arm
+- name: clean_the_dirt_with_brown_cloth_right_arm
+  path: clean_the_dirt_with_brown_cloth_right_arm
+- name: clean_the_dirt_with_sponge_left_arm
+  path: clean_the_dirt_with_sponge_left_arm
+- name: clean_the_dirt_with_sponge_right_arm
+  path: clean_the_dirt_with_sponge_right_arm
+- name: clean_the_dirt_with_white_cloth_left_arm
+  path: clean_the_dirt_with_white_cloth_left_arm
+- name: clean_the_dirt_with_white_cloth_right_arm
+  path: clean_the_dirt_with_white_cloth_right_arm
+- name: collaborate_assemble_a_beef_sandwich
+  path: collaborate_assemble_a_beef_sandwich
+- name: collect_the_glues
+  path: collect_the_glues
+- name: gather_the_teaboxes
+  path: gather_the_teaboxes
+- name: make_a_sandwich
+  path: make_a_sandwich
+- name: pack_in_objects_part1
+  path: pack_in_objects_part1
+- name: pack_in_objects_part2
+  path: pack_in_objects_part2
+- name: pack_in_objects_part3
+  path: pack_in_objects_part3
+- name: pack_out_objects_part1
+  path: pack_out_objects_part1
+- name: pack_out_objects_part2
+  path: pack_out_objects_part2
+- name: pack_out_objects_part3
+  path: pack_out_objects_part3
+- name: pack_out_objects_part4
+  path: pack_out_objects_part4
+- name: sort_the_rubbish_part1
+  path: sort_the_rubbish_part1
+- name: sort_the_rubbish_part2
+  path: sort_the_rubbish_part2
+- name: sort_the_rubbish_part3
+  path: sort_the_rubbish_part3
+- name: stack_a_beef_sandwich
+  path: stack_a_beef_sandwich
+- name: sweep_the_trash
+  path: sweep_the_trash

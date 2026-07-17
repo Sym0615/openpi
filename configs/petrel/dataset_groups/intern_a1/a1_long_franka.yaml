@@ -1,0 +1,34 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_long_franka
+category: intern_a1
+profile: a1_single_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/long_horizon_tasks/franka
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand
+  video_concat: vertical
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 0.0
+      - 1.0
+      - 0.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: manipulate_the_microwave
+  path: manipulate_the_microwave
+- name: put_the_trashcan_in_trashcan_long
+  path: put_the_trashcan_in_trashcan_long
+- name: sort_bowls_and_cups
+  path: sort_bowls_and_cups
+- name: sweep_the_trash
+  path: sweep_the_trash

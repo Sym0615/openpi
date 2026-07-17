@@ -1,0 +1,16 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_basic_acone
+category: intern_a1
+profile: a1_dual_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/basic_tasks/acone
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand_left
+    - images.rgb.hand_right
+  video_concat: robotwin
+datasets:
+- name: fold_the_blue_shirt
+  path: fold_the_blue_shirt

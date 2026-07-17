@@ -1,0 +1,77 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_articulation_split_aloha
+category: intern_a1
+profile: a1_dual_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/articulation_tasks/split_aloha
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand_left
+    - images.rgb.hand_right
+  video_concat: robotwin
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - -1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: close_the_microwave_left_arm
+  path: close_the_microwave_left_arm
+- name: close_the_microwave_right_arm
+  path: close_the_microwave_right_arm
+- name: open_the_microwave_from_scratch
+  path: open_the_microwave_from_scratch
+- name: open_the_microwave_left_arm
+  path: open_the_microwave_left_arm
+- name: open_the_microwave_right_arm
+  path: open_the_microwave_right_arm
+- name: pull_the_storagefurniture_left_arm_bottom
+  path: pull_the_storagefurniture_left_arm_bottom
+- name: pull_the_storagefurniture_left_arm_middle
+  path: pull_the_storagefurniture_left_arm_middle
+- name: pull_the_storagefurniture_left_arm_top
+  path: pull_the_storagefurniture_left_arm_top
+- name: pull_the_storagefurniture_right_arm_bottom
+  path: pull_the_storagefurniture_right_arm_bottom
+- name: pull_the_storagefurniture_right_arm_middle
+  path: pull_the_storagefurniture_right_arm_middle
+- name: pull_the_storagefurniture_right_arm_top
+  path: pull_the_storagefurniture_right_arm_top
+- name: push_the_storagefurniture_left_arm_bottom
+  path: push_the_storagefurniture_left_arm_bottom
+- name: push_the_storagefurniture_left_arm_middle
+  path: push_the_storagefurniture_left_arm_middle
+- name: push_the_storagefurniture_left_arm_top
+  path: push_the_storagefurniture_left_arm_top
+- name: push_the_storagefurniture_right_arm_bottom
+  path: push_the_storagefurniture_right_arm_bottom
+- name: push_the_storagefurniture_right_arm_middle
+  path: push_the_storagefurniture_right_arm_middle
+- name: push_the_storagefurniture_right_arm_top
+  path: push_the_storagefurniture_right_arm_top
+- name: rotate_the_left_hearth_left_arm_clockwise
+  path: rotate_the_left_hearth_left_arm_clockwise
+- name: rotate_the_left_hearth_left_arm_counterclockwise
+  path: rotate_the_left_hearth_left_arm_counterclockwise
+- name: rotate_the_left_hearth_right_arm_clockwise
+  path: rotate_the_left_hearth_right_arm_clockwise
+- name: rotate_the_left_hearth_right_arm_counterclockwise
+  path: rotate_the_left_hearth_right_arm_counterclockwise
+- name: rotate_the_right_hearth_left_arm_clockwise
+  path: rotate_the_right_hearth_left_arm_clockwise
+- name: rotate_the_right_hearth_left_arm_counterclockwise
+  path: rotate_the_right_hearth_left_arm_counterclockwise
+- name: rotate_the_right_hearth_right_arm_clockwise
+  path: rotate_the_right_hearth_right_arm_clockwise
+- name: rotate_the_right_hearth_right_arm_counterclockwise
+  path: rotate_the_right_hearth_right_arm_counterclockwise

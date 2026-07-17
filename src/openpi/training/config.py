@@ -26,6 +26,8 @@ import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.polaris_config as polaris_config
 import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
+from openpi.training.petrel_dataset import PetrelDatasetConfig
+from openpi.training.petrel_dataset import read_petrel_dataset_metadata
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
@@ -96,6 +98,9 @@ class DataConfig:
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
     datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
+
+    # Optional native Petrel backend for remote LeRobot v2/v3 data.
+    petrel: PetrelDatasetConfig | None = None
 
 
 class GroupFactory(Protocol):
@@ -222,6 +227,51 @@ class SimpleDataConfig(DataConfigFactory):
             self.create_base_config(assets_dirs, model_config),
             data_transforms=self.data_transforms(model_config),
             model_transforms=self.model_transforms(model_config),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class IdentityTransformFactory(GroupFactory):
+    """Create an empty transform group."""
+
+    @override
+    def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        del model_config
+        return _transforms.Group()
+
+
+@dataclasses.dataclass(frozen=True)
+class PetrelDataConfig(DataConfigFactory):
+    """Create openpi transforms around the native remote Petrel loader."""
+
+    repo_id: str = "petrel"
+    dataset: PetrelDatasetConfig = dataclasses.field(
+        default_factory=lambda: PetrelDatasetConfig(dataset_config=tyro.MISSING)
+    )
+    data_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=IdentityTransformFactory)
+    model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        dataset_id, contract = read_petrel_dataset_metadata(self.dataset.dataset_config)
+        if dataset_id != self.repo_id:
+            raise ValueError(
+                f"Petrel YAML dataset_id={dataset_id!r} must match PetrelDataConfig.repo_id={self.repo_id!r}."
+            )
+        if int(contract["action_dim"]) != model_config.action_dim:
+            raise ValueError(
+                f"Petrel YAML action_dim={contract['action_dim']} does not match model action_dim={model_config.action_dim}."
+            )
+        if int(contract["action_horizon"]) != model_config.action_horizon:
+            raise ValueError(
+                "Petrel YAML action_horizon="
+                f"{contract['action_horizon']} does not match model action_horizon={model_config.action_horizon}."
+            )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            data_transforms=self.data_transforms(model_config),
+            model_transforms=self.model_transforms(model_config),
+            petrel=self.dataset,
         )
 
 
@@ -891,6 +941,30 @@ _CONFIGS = [
         save_interval=5000,
         keep_period=10_000,
         num_workers=0,  # Important: RLDS DataLoader requires num_workers=0, handles multi-processing internally
+    ),
+    TrainConfig(
+        # Read mixed LeRobot v2/v3 data directly from Petrel and adapt it to
+        # openpi's fixed 32D state/action contract.
+        name="pi05_petrel",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=PetrelDataConfig(
+            repo_id="petrel_mixed",
+            dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_petrel.yaml"),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_workers=0,
+    ),
+    TrainConfig(
+        # Minimal closed-loop config: only the InternData-A1 category. All robot
+        # variants inside InternData-A1 share one global 32D normalization asset.
+        name="pi05_interna1",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=PetrelDataConfig(
+            repo_id="intern_a1",
+            dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_interna1.yaml"),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_workers=0,
     ),
     TrainConfig(
         # This config is for fine-tuning pi05-DROID on a custom (smaller) DROID dataset.

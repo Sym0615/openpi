@@ -1,0 +1,48 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_basic_franka
+category: intern_a1
+profile: a1_single_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/basic_tasks/franka
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand
+  video_concat: vertical
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 0.0
+      - 1.0
+      - 0.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: collect_the_shoes_language
+  path: collect_the_shoes_language
+- name: organize_the_alarm_clocks_language
+  path: organize_the_alarm_clocks_language
+- name: organize_the_brushes
+  path: organize_the_brushes
+- name: organize_the_colorful_cups
+  path: organize_the_colorful_cups
+- name: organize_the_glues_language
+  path: organize_the_glues_language
+- name: organize_the_teaboxes_language
+  path: organize_the_teaboxes_language
+- name: pick_the_object_into_trashcan
+  path: pick_the_object_into_trashcan
+- name: pick_the_priced_item
+  path: pick_the_priced_item
+- name: select_a_drink
+  path: select_a_drink
+- name: sort_the_table_waste
+  path: sort_the_table_waste
+- name: track_the_targets
+  path: track_the_targets

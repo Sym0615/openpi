@@ -1,0 +1,91 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_basic_split_aloha
+category: intern_a1
+profile: a1_dual_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/basic_tasks/split_aloha
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand_left
+    - images.rgb.hand_right
+  video_concat: robotwin
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - -1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: collect_the_shoes
+  path: collect_the_shoes
+- name: gather_toothbrush_and_toothpaste_part1
+  path: gather_toothbrush_and_toothpaste_part1
+- name: gather_toothbrush_and_toothpaste_part2
+  path: gather_toothbrush_and_toothpaste_part2
+- name: hang_the_cup_on_rack_left_arm
+  path: hang_the_cup_on_rack_left_arm
+- name: hang_the_cup_on_rack_right_arm
+  path: hang_the_cup_on_rack_right_arm
+- name: insert_the_flower_in_vase_left_arm
+  path: insert_the_flower_in_vase_left_arm
+- name: insert_the_flower_in_vase_right_arm
+  path: insert_the_flower_in_vase_right_arm
+- name: insert_the_markpen_in_penholder_left_arm
+  path: insert_the_markpen_in_penholder_left_arm
+- name: insert_the_markpen_in_penholder_right_arm
+  path: insert_the_markpen_in_penholder_right_arm
+- name: organize_the_alarm_clocks
+  path: organize_the_alarm_clocks
+- name: organize_the_brushes
+  path: organize_the_brushes
+- name: pick_beef_sandwich_on_conveyor
+  path: pick_beef_sandwich_on_conveyor
+- name: pick_ham_sandwich_on_conveyor
+  path: pick_ham_sandwich_on_conveyor
+- name: pick_the_priced_item
+  path: pick_the_priced_item
+- name: pour_Baijiu_left_arm
+  path: pour_Baijiu_left_arm
+- name: pour_Baijiu_right_arm
+  path: pour_Baijiu_right_arm
+- name: pour_redwine_left_arm
+  path: pour_redwine_left_arm
+- name: pour_redwine_right_arm
+  path: pour_redwine_right_arm
+- name: pour_water_left_arm
+  path: pour_water_left_arm
+- name: pour_water_right_arm
+  path: pour_water_right_arm
+- name: select_a_drink
+  path: select_a_drink
+- name: sort_the_table_waste
+  path: sort_the_table_waste
+- name: sort_the_tray_on_rack
+  path: sort_the_tray_on_rack
+- name: stack_the_boxes_part1
+  path: stack_the_boxes_part1
+- name: stack_the_boxes_part2
+  path: stack_the_boxes_part2
+- name: stack_the_boxes_part3
+  path: stack_the_boxes_part3
+- name: stack_the_boxes_part4
+  path: stack_the_boxes_part4
+- name: stack_the_boxes_part5
+  path: stack_the_boxes_part5
+- name: stack_the_boxes_part6
+  path: stack_the_boxes_part6
+- name: track_the_targets
+  path: track_the_targets
+- name: watering_plants_left_arm
+  path: watering_plants_left_arm
+- name: watering_plants_right_arm
+  path: watering_plants_right_arm

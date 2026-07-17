@@ -1,0 +1,18 @@
+schema: openpi_petrel_dataset_group_v1
+name: oxe_rpy_variant_04
+category: oxe
+profile: oxe_single_state_rpy_delta_rpy
+format: v2
+root: manip:manip-dataset/public/real/oxe
+fields:
+  video:
+    key: observation.images.image
+    keys:
+    - observation.images.image_side_2
+    - observation.images.image_side_1
+    - observation.images.image_wrist_2
+    - observation.images.image_wrist_1
+  video_concat: grid2x2
+datasets:
+- name: fmb_dataset_1.0.0_lerobot
+  path: fmb_dataset_1.0.0_lerobot

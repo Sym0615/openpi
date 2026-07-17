@@ -1,0 +1,53 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_pick_place_genie1_grasp_functional_part_left_arm
+category: intern_a1
+profile: a1_dual7_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/pick_and_place_tasks/genie1/grasp_functional_part_left_arm
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand_left
+    - images.rgb.hand_right
+  video_concat: robotwin
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - -1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: cup
+  path: cup
+- name: kettle
+  path: kettle
+- name: omniobject3d-brush
+  path: omniobject3d-brush
+- name: omniobject3d-chicken_leg
+  path: omniobject3d-chicken_leg
+- name: omniobject3d-flash_light
+  path: omniobject3d-flash_light
+- name: omniobject3d-hair_dryer
+  path: omniobject3d-hair_dryer
+- name: omniobject3d-hammer
+  path: omniobject3d-hammer
+- name: omniobject3d-knife
+  path: omniobject3d-knife
+- name: omniobject3d-table_tennis_bat
+  path: omniobject3d-table_tennis_bat
+- name: omniobject3d-tooth_brush
+  path: omniobject3d-tooth_brush
+- name: pan
+  path: pan
+- name: phocal-red_wine_glass
+  path: phocal-red_wine_glass
+- name: teapot
+  path: teapot

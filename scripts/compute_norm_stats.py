@@ -5,6 +5,9 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import dataclasses
+import pathlib
+
 import numpy as np
 import tqdm
 import tyro
@@ -13,6 +16,7 @@ import openpi.models.model as _model
 import openpi.shared.normalize as normalize
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
+import openpi.training.petrel_norm_stats as petrel_norm_stats
 import openpi.transforms as transforms
 
 
@@ -43,7 +47,7 @@ def create_torch_dataloader(
     )
     if max_frames is not None and max_frames < len(dataset):
         num_batches = max_frames // batch_size
-        shuffle = True
+        shuffle = not bool(getattr(dataset, "prefer_sequential_indices", False))
     else:
         num_batches = len(dataset) // batch_size
         shuffle = False
@@ -53,6 +57,7 @@ def create_torch_dataloader(
         num_workers=num_workers,
         shuffle=shuffle,
         num_batches=num_batches,
+        framework="pytorch",
     )
     return data_loader, num_batches
 
@@ -86,9 +91,48 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def main(config_name: str, max_frames: int | None = None):
+def create_data_config(config: _config.TrainConfig) -> _config.DataConfig:
+    """Create the pre-model data config needed by normalization statistics."""
+    data_factory = config.data
+    if isinstance(data_factory, _config.PetrelDataConfig):
+        # Norm stats only consume the pre-model state/actions. Building the
+        # normal PI0.5 model transforms would instantiate the PaliGemma
+        # tokenizer and unnecessarily download its SentencePiece model.
+        data_factory = dataclasses.replace(
+            data_factory,
+            model_transforms=_config.IdentityTransformFactory(),
+        )
+    return data_factory.create(config.assets_dirs, config.model)
+
+
+def main(
+    config_name: str,
+    max_frames: int | None = None,
+    petrel_num_workers: int = 32,
+    petrel_episode_batch_size: int = 4096,
+    petrel_reservoir_rows: int = 200000,
+    output_dir: str | None = None,
+):
     config = _config.get_config(config_name)
-    data_config = config.data.create(config.assets_dirs, config.model)
+    data_config = create_data_config(config)
+    if data_config.petrel is not None:
+        if data_config.repo_id is None:
+            raise ValueError("Petrel data config must have a repo_id.")
+        norm_stats = petrel_norm_stats.compute_fast_petrel_norm_stats(
+            data_config.petrel.dataset_config,
+            action_horizon=config.model.action_horizon,
+            output_dim=config.model.action_dim,
+            max_frames=max_frames,
+            num_workers=petrel_num_workers,
+            episode_batch_size=petrel_episode_batch_size,
+            reservoir_rows=petrel_reservoir_rows,
+            conf_path=data_config.petrel.conf_path,
+        )
+        assets_dir = config.assets_dirs if output_dir is None else pathlib.Path(output_dir)
+        output_path = assets_dir / data_config.repo_id
+        print(f"Writing stats to: {output_path}")
+        normalize.save(output_path, norm_stats)
+        return
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
@@ -108,7 +152,8 @@ def main(config_name: str, max_frames: int | None = None):
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    assets_dir = config.assets_dirs if output_dir is None else pathlib.Path(output_dir)
+    output_path = assets_dir / data_config.repo_id
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

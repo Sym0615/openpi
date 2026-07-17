@@ -1,0 +1,49 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_pick_place_split_aloha_parallel_pick_and_place_left_left
+category: intern_a1
+profile: a1_dual_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/pick_and_place_tasks/split_aloha/parallel_pick_and_place_left_left
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand_left
+    - images.rgb.hand_right
+  video_concat: robotwin
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - -1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: basket
+  path: basket
+- name: basket_top
+  path: basket_top
+- name: bowl
+  path: bowl
+- name: box
+  path: box
+- name: dish
+  path: dish
+- name: drawing
+  path: drawing
+- name: flower_pot
+  path: flower_pot
+- name: microwaveoven
+  path: microwaveoven
+- name: pad
+  path: pad
+- name: pan
+  path: pan
+- name: projector
+  path: projector

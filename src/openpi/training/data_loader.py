@@ -14,6 +14,7 @@ import torch
 import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+from openpi.training.petrel_dataset import PetrelDataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -60,6 +61,24 @@ class TransformedDataset(Dataset[T_co]):
 
     def __len__(self) -> int:
         return len(self._dataset)
+
+    def __getitems__(self, indices: list[int]) -> list[T_co]:
+        getitems = getattr(self._dataset, "__getitems__", None)
+        items = getitems(indices) if callable(getitems) else [self._dataset[index] for index in indices]
+        return [self._transform(item) for item in items]
+
+    def set_epoch(self, epoch: int) -> None:
+        set_epoch = getattr(self._dataset, "set_epoch", None)
+        if callable(set_epoch):
+            set_epoch(epoch)
+
+    @property
+    def prefer_sequential_indices(self) -> bool:
+        return bool(getattr(self._dataset, "prefer_sequential_indices", False))
+
+    @property
+    def requires_worker_restart_each_epoch(self) -> bool:
+        return bool(getattr(self._dataset, "requires_worker_restart_each_epoch", False))
 
 
 class IterableTransformedDataset(IterableDataset[T_co]):
@@ -131,6 +150,13 @@ def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
     """Create a dataset for training."""
+    if data_config.petrel is not None:
+        return PetrelDataset(
+            data_config.petrel,
+            action_horizon=action_horizon,
+            model_action_dim=model_config.action_dim,
+        )
+
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
@@ -302,6 +328,10 @@ def create_torch_data_loader(
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
+    if getattr(dataset, "prefer_sequential_indices", False) and shuffle:
+        logging.info("Disabling outer shuffle to preserve Petrel block sampling locality.")
+        shuffle = False
+
     # Use TorchDataLoader for both frameworks
     # For PyTorch DDP, create DistributedSampler and divide batch size by world size
     # For JAX, divide by process count
@@ -409,8 +439,10 @@ class TorchDataLoader:
                 execute in the main process.
             seed: The seed to use for shuffling the data.
         """
-        if jax.process_count() > 1:
-            raise NotImplementedError("Data loading with multiple processes is not supported.")
+        if framework not in {"jax", "pytorch"}:
+            raise ValueError(f"Unsupported data loader framework: {framework!r}")
+        if framework == "jax" and jax.process_count() > 1:
+            raise NotImplementedError("Data loading with multiple JAX processes is not supported.")
 
         if len(dataset) < local_batch_size:
             raise ValueError(f"Local batch size ({local_batch_size}) is larger than the dataset size ({len(dataset)}).")
@@ -424,6 +456,8 @@ class TorchDataLoader:
                 jax.sharding.PartitionSpec("B"),
             )
         self._num_batches = num_batches
+        self._dataset = dataset
+        self._sampler = sampler
 
         mp_context = None
         if num_workers > 0:
@@ -438,7 +472,8 @@ class TorchDataLoader:
             sampler=sampler,
             num_workers=num_workers,
             multiprocessing_context=mp_context,
-            persistent_workers=num_workers > 0,
+            persistent_workers=num_workers > 0
+            and not bool(getattr(dataset, "requires_worker_restart_each_epoch", False)),
             collate_fn=_collate_fn,
             worker_init_fn=_worker_init_fn,
             drop_last=True,
@@ -451,7 +486,14 @@ class TorchDataLoader:
 
     def __iter__(self):
         num_items = 0
+        epoch = 0
         while True:
+            set_epoch = getattr(self._dataset, "set_epoch", None)
+            if callable(set_epoch):
+                set_epoch(epoch)
+            sampler_set_epoch = getattr(self._sampler, "set_epoch", None)
+            if callable(sampler_set_epoch):
+                sampler_set_epoch(epoch)
             data_iter = iter(self._data_loader)
             while True:
                 if self._num_batches is not None and num_items >= self._num_batches:
@@ -466,6 +508,7 @@ class TorchDataLoader:
                     yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
                 else:
                     yield jax.tree.map(torch.as_tensor, batch)
+            epoch += 1
 
 
 def _collate_fn(items):

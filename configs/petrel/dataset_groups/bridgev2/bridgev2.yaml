@@ -1,0 +1,14 @@
+schema: openpi_petrel_dataset_group_v1
+name: bridgev2
+category: bridgev2
+profile: bridge_single_delta_ee
+format: v2
+root: manip:manip-dataset/public/real
+fields:
+  video:
+    keys:
+    - video.image_0
+  video_concat: single
+datasets:
+- name: InternData-BridgeV2
+  path: InternData-BridgeV2

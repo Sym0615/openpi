@@ -1,0 +1,43 @@
+schema: openpi_petrel_dataset_group_v1
+name: a1_basic_genie1
+category: intern_a1
+profile: a1_dual7_ee
+format: v3
+root: manip:manip-dataset/private/sim/InternData-A1_v30/basic_tasks/genie1
+fields:
+  video:
+    keys:
+    - images.rgb.head
+    - images.rgb.hand_left
+    - images.rgb.hand_right
+  video_concat: robotwin
+mapping_overrides:
+  frame_transform:
+    world_from_source: robot_to_opencv
+    source_ee_from_canonical_ee:
+    - - 0.0
+      - -1.0
+      - 0.0
+    - - 0.0
+      - 0.0
+      - -1.0
+    - - 1.0
+      - 0.0
+      - 0.0
+datasets:
+- name: scan_qrcode_part1
+  path: scan_qrcode_part1
+- name: scan_qrcode_part2
+  path: scan_qrcode_part2
+- name: store_the_eggs_part1
+  path: store_the_eggs_part1
+- name: store_the_eggs_part2
+  path: store_the_eggs_part2
+- name: take_shelf_items_to_cart_left_arm_part1
+  path: take_shelf_items_to_cart_left_arm_part1
+- name: take_shelf_items_to_cart_left_arm_part2
+  path: take_shelf_items_to_cart_left_arm_part2
+- name: take_shelf_items_to_cart_right_arm_part1
+  path: take_shelf_items_to_cart_right_arm_part1
+- name: take_shelf_items_to_cart_right_arm_part2
+  path: take_shelf_items_to_cart_right_arm_part2

@@ -1,0 +1,17 @@
+schema: openpi_petrel_dataset_group_v1
+name: oxe_rpy_variant_00
+category: oxe
+profile: oxe_single_state_rpy_delta_rpy
+format: v2
+root: manip:manip-dataset/public/real/oxe
+fields:
+  video:
+    key: observation.images.image
+    keys:
+    - observation.images.exterior_image_1_left
+    - observation.images.exterior_image_2_left
+    - observation.images.wrist_image_left
+  video_concat: robotwin
+datasets:
+- name: droid_1.0.0_lerobot
+  path: droid_1.0.0_lerobot

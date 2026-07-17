@@ -1,0 +1,32 @@
+schema: openpi_petrel_dataset_group_v1
+name: intern_m1
+category: intern_m1
+profile: intern_m1_single_delta_effector
+format: v2
+root: manip:manip-dataset/private/sim/InternData-M1
+fields:
+  video:
+    keys:
+    - images.rgb.base_view_2
+    - images.rgb.ego_view
+  video_concat: vertical
+mapping_overrides:
+  slots:
+    right:
+      ee:
+        frame_transform:
+          world_from_source: robot_to_opencv
+          source_ee_from_canonical_ee:
+          - - 0
+            - 0
+            - -1
+          - - 0
+            - 1
+            - 0
+          - - 1
+            - 0
+            - 0
+control_type: single_arm
+datasets:
+- name: franka
+  path: simulated/franka
