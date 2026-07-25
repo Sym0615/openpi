@@ -2,6 +2,67 @@ schema: openpi_petrel_dataset_group_v1
 name: oxe_rpy_variant_02
 category: oxe
 profile: oxe_single_state_rpy_delta_rpy
+control_profiles:
+  oxe_single_state_rpy_delta_rpy:
+    control_type: single_arm
+    mapping:
+      layout: robot
+      single_arm_slot: right
+      pose_input: xyz_rpy
+      action_pose_input: delta_xyz_rpy
+      state_pose_output: xyz_rot6d
+      action_pose_output: xyz_rotvec
+      missing_policy: pad_and_mask
+      frame_transform:
+        world_from_source: z_up_to_opencv
+        source_ee_from_canonical_ee: opencv_to_robot
+      slots:
+        right:
+          ee:
+            state_key: observation.state
+            action_key: action
+            state_raw_slice:
+            - 0
+            - 6
+            action_raw_slice:
+            - 0
+            - 6
+            state_target_slice:
+            - 47
+            - 56
+            action_target_slice:
+            - 47
+            - 53
+          gripper:
+            state_key: observation.state
+            action_key: action
+            state_raw_slice:
+            - 7
+            - 8
+            action_raw_slice:
+            - 6
+            - 7
+            target_slice:
+            - 56
+            - 57
+            action_from_next_state: true
+    fields:
+      state:
+        keys:
+        - observation.state
+      action:
+        keys:
+        - action
+      video:
+        key: auto
+      language:
+        source: meta/tasks.jsonl
+      timestamp:
+        key: timestamp
+      frame_index:
+        key: frame_index
+      task_index:
+        key: task_index
 format: v2
 root: manip:manip-dataset/public/real/oxe
 fields:

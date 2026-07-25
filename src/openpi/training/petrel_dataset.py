@@ -21,8 +21,7 @@ _OPENPI_CAMERA_NAMES = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
 
 def read_petrel_dataset_metadata(config_path: str) -> tuple[str, Mapping[str, Any]]:
     """Read the dataset id and openpi contract without accessing remote storage."""
-    config = reader.read_openpi_petrel_config(config_path)
-    return str(config["dataset_id"]), config["openpi"]
+    return reader.read_openpi_petrel_metadata(config_path)
 
 
 def _dimension_padding(item: Mapping[str, Any], key: str, dimension: int) -> torch.Tensor:
@@ -137,7 +136,7 @@ class PetrelDataset(torch.utils.data.Dataset):
             return
 
         loader = reader
-        config_path = Path(self.config.dataset_config).expanduser()
+        config_path = Path(self.config.dataset_config).expanduser()  # "configs/petrel/pi05_xxx.yaml"
         raw_config, specs = loader.load_dataset_specs(config_path, self.config.conf_path)
         self._validate_openpi_contract(raw_config)
         if not specs:
@@ -160,7 +159,8 @@ class PetrelDataset(torch.utils.data.Dataset):
 
         mixture_cfg = raw_config.get("mixture", {}) if isinstance(raw_config.get("mixture"), dict) else {}
         allow_padding = bool(mixture_cfg.get("allow_padding_at_end", False))
-        dataset_weights = loader.distributed_dataset_weights(
+        # List Weights a1_articulation_franka.yaml-datasets  petrel.yaml weights * singel a1_articulation_franka.yaml-datasets / all a1_articulation_franka.yaml-datasets
+        dataset_weights = loader.distributed_dataset_weights(  
             specs,
             datasets,
             allow_padding_at_end=allow_padding,

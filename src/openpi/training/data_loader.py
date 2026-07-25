@@ -53,8 +53,8 @@ class DataLoader(Protocol[T_co]):
 
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
-        self._dataset = dataset
-        self._transform = _transforms.compose(transforms)
+        self._dataset = dataset  # PetrelDataset
+        self._transform = _transforms.compose(transforms)  
 
     def __getitem__(self, index: SupportsIndex) -> T_co:
         return self._transform(self._dataset[index])
@@ -265,6 +265,7 @@ def create_data_loader(
         skip_norm_stats: Whether to skip data normalization.
         framework: The framework to use ("jax" or "pytorch").
     """
+    # DataConfig()
     data_config = config.data.create(config.assets_dirs, config.model)
     logging.info(f"data_config: {data_config}")
 
@@ -456,7 +457,7 @@ class TorchDataLoader:
                 jax.sharding.PartitionSpec("B"),
             )
         self._num_batches = num_batches
-        self._dataset = dataset
+        self._dataset = dataset   #  TransformedDataset
         self._sampler = sampler
 
         mp_context = None
@@ -572,8 +573,8 @@ class RLDSDataLoader:
 
 class DataLoaderImpl(DataLoader):
     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
-        self._data_config = data_config
-        self._data_loader = data_loader
+        self._data_config = data_config  
+        self._data_loader = data_loader  # TorchDataLoader
 
     def data_config(self) -> _config.DataConfig:
         return self._data_config

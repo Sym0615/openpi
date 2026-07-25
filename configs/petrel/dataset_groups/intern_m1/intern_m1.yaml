@@ -2,6 +2,75 @@ schema: openpi_petrel_dataset_group_v1
 name: intern_m1
 category: intern_m1
 profile: intern_m1_single_delta_effector
+control_profiles:
+  intern_m1_single_delta_effector:
+    control_type: single_arm
+    mapping:
+      layout: robot
+      single_arm_slot: right
+      pose_input: xyz_rpy
+      action_pose_input: delta_xyz_rpy
+      state_pose_output: xyz_rot6d
+      action_pose_output: xyz_rotvec
+      missing_policy: pad_and_mask
+      slots:
+        right:
+          joint:
+            state_key: states.joint.position
+            action_key: actions.joint.position
+            raw_slice:
+            - 0
+            - 7
+            target_slice:
+            - 40
+            - 47
+          ee:
+            state_position_key: states.effector.position
+            state_rotation_key: states.effector.orientation
+            action_position_key: actions.effector.delta_position
+            action_rotation_key: actions.effector.delta_orientation
+            state_target_slice:
+            - 47
+            - 56
+            action_target_slice:
+            - 47
+            - 53
+          gripper:
+            state_key: states.gripper.position
+            action_key: actions.gripper.position
+            state_raw_slice:
+            - 0
+            - 1
+            action_raw_slice:
+            - 0
+            - 1
+            target_slice:
+            - 56
+            - 57
+            action_from_next_state: true
+    fields:
+      state:
+        keys:
+        - states.joint.position
+        - states.effector.position
+        - states.effector.orientation
+        - states.gripper.position
+      action:
+        keys:
+        - actions.joint.position
+        - actions.effector.delta_position
+        - actions.effector.delta_orientation
+        - actions.gripper.position
+      video:
+        key: auto
+      language:
+        source: meta/tasks.parquet
+      timestamp:
+        key: timestamp
+      frame_index:
+        key: frame_index
+      task_index:
+        key: task_index
 format: v2
 root: manip:manip-dataset/private/sim/InternData-M1
 fields:

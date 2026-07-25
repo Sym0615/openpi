@@ -6,7 +6,7 @@ from transformers import GemmaForCausalLM
 from transformers import PaliGemmaForConditionalGeneration
 from transformers.models.auto import CONFIG_MAPPING
 from transformers.models.gemma import modeling_gemma
-
+from transformers.models.paligemma import PaliGemmaConfig
 
 class PaliGemmaWithExpertModel(nn.Module):
     def __init__(
@@ -20,6 +20,7 @@ class PaliGemmaWithExpertModel(nn.Module):
             use_adarms = [False, False]
         super().__init__()
 
+        # PaliGemmaConfig
         vlm_config_hf = CONFIG_MAPPING["paligemma"]()
         vlm_config_hf._vocab_size = 257152  # noqa: SLF001
         vlm_config_hf.image_token_index = 257152
@@ -53,7 +54,7 @@ class PaliGemmaWithExpertModel(nn.Module):
             adarms_cond_dim=action_expert_config.width if use_adarms[1] else None,
         )
 
-        self.paligemma = PaliGemmaForConditionalGeneration(config=vlm_config_hf)
+        self.paligemma = PaliGemmaForConditionalGeneration(config=vlm_config_hf)  # vision lang encoder
         self.gemma_expert = GemmaForCausalLM(config=action_expert_config_hf)
         self.gemma_expert.model.embed_tokens = None
 

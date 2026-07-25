@@ -260,6 +260,18 @@ schema: openpi_petrel_dataset_group_v1
 name: one
 category: single
 profile: single_arm
+control_profiles:
+  single_arm:
+    control_type: single_arm
+    mapping:
+      layout: robot
+      slots:
+        right:
+          joint: {state_key: observation.state, action_key: action, target_slice: [40, 47]}
+    fields:
+      state: {keys: [observation.state]}
+      action: {keys: [action]}
+      video: {key: auto}
 format: v3
 root: example:s3://bucket/root
 datasets:
@@ -296,18 +308,6 @@ mixture:
   category_weights: {single: 1.0}
   distribute_category_weight_by_valid_windows: true
 source_control_space: {name: robot, dim: 80}
-control_profiles:
-  single_arm:
-    control_type: single_arm
-    mapping:
-      layout: robot
-      slots:
-        right:
-          joint: {state_key: observation.state, action_key: action, target_slice: [40, 47]}
-    fields:
-      state: {keys: [observation.state]}
-      action: {keys: [action]}
-      video: {key: auto}
 dataset_files:
   directory: datasets
   recursive: true
@@ -323,6 +323,34 @@ dataset_files:
     assert translated["sources"][0]["adapter"] == "single_arm"
     assert translated["sources"][0]["datasets"] == [{"dir": "task_a", "name": "task_a"}]
     assert translated["dataset_weights"]["source_files"] == {"single": 1.0}
+
+
+def test_openpi_petrel_metadata_does_not_scan_dataset_groups(tmp_path):
+    config_path = tmp_path / "metadata_only.yaml"
+    config_path.write_text(
+        """
+schema: openpi_petrel_v1
+dataset_id: metadata_only
+openpi:
+  state_dim: 32
+  action_dim: 32
+  action_horizon: 16
+  control_projection: compact_valid
+  normalization: quantile
+  images:
+    size: [224, 224]
+    slots: [base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb]
+dataset_files:
+  directory: directory_that_does_not_exist
+""".strip(),
+        encoding="utf-8",
+    )
+
+    dataset_id, contract = petrel_dataset.reader.read_openpi_petrel_metadata(config_path)
+
+    assert dataset_id == "metadata_only"
+    assert contract["action_dim"] == 32
+    assert contract["action_horizon"] == 16
 
 
 def test_pi05_petrel_yaml_expands_all_repository_datasets():

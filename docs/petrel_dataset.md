@@ -5,8 +5,10 @@ The main data definition is `configs/petrel/pi05_petrel.yaml`, using
 grouped under `configs/petrel/dataset_groups/` using
 `openpi_petrel_dataset_group_v1`.
 
-The main file contains the openpi contract, control profiles, sampling, storage,
-and category weights. It loads dataset files through:
+The main file contains only global settings: the openpi contract, sampling,
+storage, source control space, category weights, and dataset discovery. Each
+dataset-group file owns its selected control profile. The main file loads those
+files through:
 
 ```yaml
 dataset_files:
@@ -23,6 +25,11 @@ schema: openpi_petrel_dataset_group_v1
 name: agibotworld
 category: agibotworld
 profile: agibot_a2d_end_pose
+control_profiles:
+  agibot_a2d_end_pose:
+    control_type: dual_arm
+    mapping: {...}
+    fields: {...}
 format: v2
 root: manip:manip-dataset/public/real/agibotworld
 fields:
@@ -35,9 +42,11 @@ datasets:
     path: task_351
 ```
 
-Every item under `datasets` is restricted to exactly `name` and `path`. OXE has
-several camera-field variants, so it is split into separate variant group files
-rather than mixing incompatible common parameters.
+`control_profiles` must contain exactly the profile selected by `profile`.
+Repeated definitions with the same profile name must be identical across group
+files. Every item under `datasets` is restricted to exactly `name` and `path`.
+OXE has several camera-field variants, so it is split into separate variant
+group files rather than mixing incompatible common parameters.
 
 ## Configuration ownership
 
@@ -47,9 +56,10 @@ configuration layers:
 - `config.assets_dirs` and `config.model` come from openpi's Python
   `TrainConfig`. They determine the checkpoint-compatible model shape and where
   openpi loads/saves training assets such as normalization statistics.
-- `pi05_petrel.yaml` describes remote datasets, fields, cameras, controls,
-  sampling, and mixture weights. It must not contain `assets_dirs` or a Python
-  model object.
+- `pi05_petrel.yaml` describes global storage, sampling, mixture, and OpenPI
+  tensor contracts. Dataset-group YAML files describe remote datasets, fields,
+  cameras, and their selected control profile. Neither layer contains
+  `assets_dirs` or a Python model object.
 
 During `PetrelDataConfig.create`, openpi validates that YAML `dataset_id` matches
 `repo_id`, and that YAML action dimension and horizon match the selected model.
@@ -64,7 +74,7 @@ images: 3 RGB uint8 slots, resized by openpi to 224x224
 state: [32]
 actions: [16, 32]
 normalization: quantile
-control profiles: 9
+distinct dataset-local control profiles: 9
 logical source groups: 50
 dataset group YAML files: 58
 remote datasets after expansion: 1785

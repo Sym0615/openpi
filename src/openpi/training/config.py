@@ -184,7 +184,8 @@ class DataConfigFactory(abc.ABC):
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
         asset_id = self.assets.asset_id or repo_id
-        return dataclasses.replace(
+        # DataConfig()
+        return dataclasses.replace(        
             self.base_config or DataConfig(),
             repo_id=repo_id,
             asset_id=asset_id,
@@ -248,6 +249,9 @@ class PetrelDataConfig(DataConfigFactory):
     dataset: PetrelDatasetConfig = dataclasses.field(
         default_factory=lambda: PetrelDatasetConfig(dataset_config=tyro.MISSING)
     )
+    # absolute action - relative action
+    # translate joint order
+    # translate griper data
     data_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=IdentityTransformFactory)
     model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
 
