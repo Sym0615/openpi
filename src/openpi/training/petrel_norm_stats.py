@@ -236,10 +236,12 @@ def _worker(payload: dict[str, Any]) -> _WorkerStats:
     torch.set_num_threads(1)
     worker_id = int(payload["worker_id"])
     output_dim = int(payload["output_dim"])
+    projection = str(payload["raw_config"]["openpi"].get("control_projection", "compact_valid"))
+    stats_dim = petrel_dataset.projected_feature_dim(output_dim, projection)
     reservoir_rows = int(payload["reservoir_rows"])
     stats = _WorkerStats(
-        state=_Accumulator(output_dim, reservoir_rows, int(payload["seed"]) + worker_id * 1009 + 11),
-        actions=_Accumulator(output_dim, reservoir_rows, int(payload["seed"]) + worker_id * 1009 + 23),
+        state=_Accumulator(stats_dim, reservoir_rows, int(payload["seed"]) + worker_id * 1009 + 11),
+        actions=_Accumulator(stats_dim, reservoir_rows, int(payload["seed"]) + worker_id * 1009 + 23),
     )
     raw_config = payload["raw_config"]
     specs = payload["specs"]
@@ -264,7 +266,11 @@ def _worker(payload: dict[str, Any]) -> _WorkerStats:
                     max_start=max_start,
                     start_indices=starts,
                 ):
-                    state, actions = petrel_dataset.project_petrel_features(item, output_dim)
+                    state, actions = petrel_dataset.project_petrel_features(
+                        item,
+                        output_dim,
+                        projection=projection,
+                    )
                     stats.state.update(state[:, 0, :])
                     stats.actions.update(actions)
                     stats.windows += int(item["_stats_num_samples"])
@@ -295,8 +301,15 @@ def compute_fast_petrel_norm_stats(
     reservoir_rows: int,
     seed: int = 42,
     conf_path: str | None = None,
+    storage_backend: str | None = None,
+    local_root: str | None = None,
 ) -> dict[str, normalize.NormStats]:
-    raw_config, specs = reader.load_dataset_specs(dataset_config, conf_path)
+    raw_config, specs = reader.load_dataset_specs(
+        dataset_config,
+        conf_path,
+        storage_backend=storage_backend,
+        local_root=local_root,
+    )
     units, _, selected_windows = build_episode_plan(
         raw_config,
         specs,
@@ -322,9 +335,11 @@ def compute_fast_petrel_norm_stats(
         }
         for worker_id, shard in enumerate(shards)
     ]
+    projection = str(raw_config["openpi"].get("control_projection", "compact_valid"))
+    stats_dim = petrel_dataset.projected_feature_dim(output_dim, projection)
     merged = _WorkerStats(
-        state=_Accumulator(output_dim, int(reservoir_rows), int(seed) + 101),
-        actions=_Accumulator(output_dim, int(reservoir_rows), int(seed) + 211),
+        state=_Accumulator(stats_dim, int(reservoir_rows), int(seed) + 101),
+        actions=_Accumulator(stats_dim, int(reservoir_rows), int(seed) + 211),
     )
     started = time.perf_counter()
     if len(payloads) == 1:

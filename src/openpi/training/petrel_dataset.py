@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 import dataclasses
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -17,6 +17,8 @@ import torch
 from openpi.training import petrel_lerobot_reader as reader
 
 _OPENPI_CAMERA_NAMES = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+_COMPACT_VALID_PROJECTION = "compact_valid"
+_PI05_ALOHA_32_PROJECTION = "pi05_aloha_32"
 
 
 def read_petrel_dataset_metadata(config_path: str) -> tuple[str, Mapping[str, Any]]:
@@ -43,8 +45,44 @@ def _pad_feature(value: torch.Tensor, output_dim: int) -> torch.Tensor:
     return torch.cat((value, padding), dim=-1)
 
 
-def project_petrel_features(item: Mapping[str, Any], output_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Project canonical Petrel tensors into OpenPI's compact fixed-width control space."""
+def _pi05_aloha_32_projection(
+    state: torch.Tensor, actions: torch.Tensor, output_dim: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Map canonical controls to ALOHA 14D before the standard model transform pads to 32D."""
+    if output_dim != 32:
+        raise ValueError(f"pi05_aloha_32 requires output_dim=32, got {output_dim}.")
+    if state.shape[-1] != 80:
+        raise ValueError(f"pi05_aloha_32 requires the canonical 80D robot layout, got {state.shape[-1]}D.")
+
+    projected_state = torch.zeros((*state.shape[:-1], 14), dtype=state.dtype, device=state.device)
+    projected_actions = torch.zeros((*actions.shape[:-1], 14), dtype=actions.dtype, device=actions.device)
+
+    # Official ALOHA order: left joint[6], left gripper, right joint[6], right gripper.
+    component_slices = (
+        (slice(0, 6), slice(0, 6)),
+        (slice(16, 17), slice(6, 7)),
+        (slice(40, 46), slice(7, 13)),
+        (slice(56, 57), slice(13, 14)),
+    )
+    for source_slice, target_slice in component_slices:
+        projected_state[..., target_slice] = state[..., source_slice]
+        projected_actions[..., target_slice] = actions[..., source_slice]
+
+    return projected_state, projected_actions
+
+
+def projected_feature_dim(output_dim: int, projection: str) -> int:
+    if projection == _PI05_ALOHA_32_PROJECTION:
+        if output_dim != 32:
+            raise ValueError(f"pi05_aloha_32 requires output_dim=32, got {output_dim}.")
+        return 14
+    return output_dim
+
+
+def project_petrel_features(
+    item: Mapping[str, Any], output_dim: int, *, projection: str = _COMPACT_VALID_PROJECTION
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Project canonical Petrel tensors into OpenPI's fixed-width control space."""
     state = torch.as_tensor(item["observation.state"], dtype=torch.float32)
     actions = torch.as_tensor(item["action"], dtype=torch.float32)
     if state.shape[-1] != actions.shape[-1]:
@@ -57,6 +95,11 @@ def project_petrel_features(item: Mapping[str, Any], output_dim: int) -> tuple[t
     action_padding = _dimension_padding(item, "action_dim_is_pad", dimension)
     state = state.masked_fill(state_padding, 0.0)
     actions = actions.masked_fill(action_padding, 0.0)
+
+    if projection == _PI05_ALOHA_32_PROJECTION:
+        return _pi05_aloha_32_projection(state, actions, output_dim)
+    if projection != _COMPACT_VALID_PROJECTION:
+        raise ValueError(f"Unsupported Petrel control projection {projection!r}.")
 
     action_indices = torch.nonzero(~action_padding, as_tuple=False).flatten()
     if action_indices.numel() > output_dim:
@@ -80,11 +123,14 @@ def project_petrel_features(item: Mapping[str, Any], output_dim: int) -> tuple[t
 
 @dataclasses.dataclass(frozen=True)
 class PetrelDatasetConfig:
-    """Configuration for openpi remote Petrel LeRobot data."""
+    """Configuration for OpenPI SDK/local LeRobot data."""
 
     dataset_config: str
     # None uses storage.petrel_conf from the YAML. Set this only as a runtime override.
     conf_path: str | None = None
+    # None uses storage.backend/local_root from the YAML. CLI overrides are useful for switching hosts.
+    storage_backend: Literal["sdk", "local"] | None = None
+    local_root: str | None = None
     prompt_template: str = "{task}"
     training: bool = True
     epoch_length: int | None = None
@@ -95,6 +141,10 @@ class PetrelDatasetConfig:
     def __post_init__(self) -> None:
         if not self.dataset_config:
             raise ValueError("dataset_config must be set for Petrel data.")
+        if self.storage_backend not in {None, "sdk", "local"}:
+            raise ValueError("storage_backend must be one of: sdk, local.")
+        if self.storage_backend == "sdk" and self.local_root is not None:
+            raise ValueError("local_root can only be used with storage_backend='local'.")
         if "{task}" not in self.prompt_template:
             raise ValueError("prompt_template must contain '{task}'.")
         if self.epoch_length is not None and self.epoch_length <= 0:
@@ -122,6 +172,7 @@ class PetrelDataset(torch.utils.data.Dataset):
         self.action_horizon = int(action_horizon)
         self.model_action_dim = int(model_action_dim)
         self.output_dim = self.model_action_dim
+        self.control_projection = _COMPACT_VALID_PROJECTION
         self._camera_key_map: dict[str, str] = {}
         self._datasets: list[Any] | None = None
         self._mixed_dataset: Any | None = None
@@ -137,7 +188,12 @@ class PetrelDataset(torch.utils.data.Dataset):
 
         loader = reader
         config_path = Path(self.config.dataset_config).expanduser()  # "configs/petrel/pi05_xxx.yaml"
-        raw_config, specs = loader.load_dataset_specs(config_path, self.config.conf_path)
+        raw_config, specs = loader.load_dataset_specs(
+            config_path,
+            self.config.conf_path,
+            storage_backend=self.config.storage_backend,
+            local_root=self.config.local_root,
+        )
         self._validate_openpi_contract(raw_config)
         if not specs:
             raise ValueError(f"Petrel dataset config expanded to no datasets: {config_path}")
@@ -160,7 +216,7 @@ class PetrelDataset(torch.utils.data.Dataset):
         mixture_cfg = raw_config.get("mixture", {}) if isinstance(raw_config.get("mixture"), dict) else {}
         allow_padding = bool(mixture_cfg.get("allow_padding_at_end", False))
         # List Weights a1_articulation_franka.yaml-datasets  petrel.yaml weights * singel a1_articulation_franka.yaml-datasets / all a1_articulation_franka.yaml-datasets
-        dataset_weights = loader.distributed_dataset_weights(  
+        dataset_weights = loader.distributed_dataset_weights(
             specs,
             datasets,
             allow_padding_at_end=allow_padding,
@@ -207,6 +263,7 @@ class PetrelDataset(torch.utils.data.Dataset):
         if contract.get("normalization") != "quantile":
             raise ValueError("pi05_petrel requires openpi.normalization: quantile.")
         self.output_dim = action_dim
+        self.control_projection = str(contract.get("control_projection", _COMPACT_VALID_PROJECTION))
 
     def _effective_feature_dim(self, dimension: int) -> int:
         del dimension
@@ -303,7 +360,7 @@ class PetrelDataset(torch.utils.data.Dataset):
         return images
 
     def _project_features(self, item: Mapping[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
-        return project_petrel_features(item, self.output_dim)
+        return project_petrel_features(item, self.output_dim, projection=self.control_projection)
 
     def _pack_item(self, item: Mapping[str, Any], images: Mapping[str, np.ndarray]) -> dict[str, Any]:
         state, actions = self._project_features(item)

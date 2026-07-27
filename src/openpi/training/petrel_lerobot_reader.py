@@ -31,7 +31,7 @@ import os
 import tempfile
 import time
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from urllib.parse import urlparse
 from pathlib import Path
@@ -41,6 +41,8 @@ import numpy as np
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import torch
+
+from openpi.training import profiling as _training_profiling
 
 
 DEFAULT_PROMPT = "A video recorded from a robot's point of view executing the following instruction: {task}"
@@ -105,6 +107,7 @@ def _resolve_petrel_conf(conf_path: str | None = None) -> str:
 
 
 def _profile_record(name: str, elapsed_s: float, **info: Any) -> None:
+    _training_profiling.record(name, elapsed_s, num_bytes=info.get("bytes"))
     if _PROFILE_ENABLED:
         _PROFILE_EVENTS.append((name, float(elapsed_s), info))
 
@@ -262,6 +265,33 @@ class PetrelClient:
         return data
 
 
+class LocalFileClient:
+    """Read dataset objects from one isolated local filesystem root."""
+
+    def __init__(self, root: str | Path):
+        self.root = Path(root).expanduser().resolve()
+
+    def get_bytes(self, path: str) -> bytes:
+        local_path = Path(path).expanduser()
+        if not local_path.is_absolute():
+            raise ValueError(f"Local dataset path must be absolute, got {path!r}.")
+        resolved = local_path.resolve()
+        if not resolved.is_relative_to(self.root):
+            raise ValueError(f"Local dataset path escapes configured root {self.root}: {resolved}")
+        try:
+            t0 = time.perf_counter()
+            data = resolved.read_bytes()
+        except OSError as exc:
+            raise FileNotFoundError(f"[LocalFileClient] failed to read {resolved}: {exc}") from exc
+        _profile_record(
+            "local.get_bytes",
+            time.perf_counter() - t0,
+            bytes=len(data),
+            path=resolved.name,
+        )
+        return data
+
+
 def petrel_join(base_url: str, *parts: str) -> str:
     url = str(base_url).rstrip("/")
     for part in parts:
@@ -271,6 +301,8 @@ def petrel_join(base_url: str, *parts: str) -> str:
 
 def _is_petrel_absolute_path(path: str) -> bool:
     text = str(path)
+    if Path(text).is_absolute():
+        return True
     if "://" in text:
         return True
     first_segment = text.split("/", 1)[0]
@@ -1054,6 +1086,8 @@ class DatasetSpec:
     state_target_dim: int | None = None
     source_name: str | None = None
     group_id: int = 0
+    storage_backend: str = "sdk"
+    local_root: str | None = None
 
 
 class PetrelLeRobotDataset(torch.utils.data.Dataset):
@@ -1073,7 +1107,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         shared_parquet_cache: Any | None = None,
     ):
         self.spec = spec
-        self._client: PetrelClient | None = None
+        self._client: PetrelClient | LocalFileClient | None = None
         self.name = spec.name  # petrel/dataset_groups/intern_a1/a1_articulation_franka.yaml-datasets-name
         self.remote_root = spec.remote_root.rstrip("/") # dataset_groups/intern_a1/a1_articulation_franka.yaml-(root+datasets/name)
         self.modalities = spec.modalities or {} # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/fields+fields)
@@ -1590,9 +1624,14 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         return [self._path_index_row(int(key), self.episodes_dict[key]) for key in sorted(self.episodes_dict)]
 
     @property
-    def client(self) -> PetrelClient:
+    def client(self) -> PetrelClient | LocalFileClient:
         if self._client is None:
-            self._client = PetrelClient(self.spec.conf_path)
+            if self.spec.storage_backend == "local":
+                if not self.spec.local_root:
+                    raise ValueError(f"Local dataset {self.name!r} is missing local_root.")
+                self._client = LocalFileClient(self.spec.local_root)
+            else:
+                self._client = PetrelClient(self.spec.conf_path)
         return self._client
 
     @property
@@ -1730,16 +1769,25 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         raw = self.client.get_bytes(self._remote_path(rel_path))
         for local_path in local_paths:
             t0 = time.perf_counter()
+            tmp_path: Path | None = None
             try:
                 local_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = local_path.with_suffix(local_path.suffix + ".tmp")
-                tmp_path.write_bytes(raw)
+                with tempfile.NamedTemporaryFile(
+                    "wb",
+                    dir=local_path.parent,
+                    prefix=local_path.name + ".tmp.",
+                    delete=False,
+                ) as handle:
+                    handle.write(raw)
+                    tmp_path = Path(handle.name)
                 tmp_path.replace(local_path)
                 _profile_record(
                     "local_meta.write_bytes", time.perf_counter() - t0, bytes=len(raw), path=local_path.name
                 )
                 break
             except Exception:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
                 continue
         return raw
 
@@ -3587,7 +3635,12 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
         "schema": payload["schema"],
         "dataset_id": dataset_id,
         "openpi": contract,
-        "storage": {"parquet_cache_size": int(storage.get("parquet_cache_size", 8))},
+        "storage": {
+            "backend": str(storage.get("backend", "sdk")),
+            "local_root": storage.get("local_root"),
+            "local_remote_prefix": storage.get("local_remote_prefix"),
+            "parquet_cache_size": int(storage.get("parquet_cache_size", 8)),
+        },
         "sampling": {
             "num_frames": int(sampling.get("state_frames", 1)),
             "action_size": int(sampling.get("action_horizon", contract["action_horizon"])),
@@ -3653,8 +3706,9 @@ def _validate_openpi_petrel_metadata(payload: dict[str, Any]) -> tuple[str, dict
         raise ValueError("Petrel YAML openpi.images.size must be [224, 224].")
     if contract.get("normalization") not in {"quantile", "zscore"}:
         raise ValueError("Petrel YAML openpi.normalization must be quantile or zscore.")
-    if contract.get("control_projection", "compact_valid") != "compact_valid":
-        raise ValueError("openpi_petrel_v1 currently supports control_projection: compact_valid only.")
+    supported_projections = {"compact_valid", "pi05_aloha_32"}
+    if contract.get("control_projection", "compact_valid") not in supported_projections:
+        raise ValueError(f"openpi_petrel_v1 control_projection must be one of {sorted(supported_projections)}.")
     return dataset_id, contract
 
 
@@ -3700,9 +3754,13 @@ def read_openpi_petrel_config(config_path: str | Path) -> dict[str, Any]:
 
 
 def load_dataset_specs(
-    config_path: str | Path, conf_path: str | None = None
+    config_path: str | Path,
+    conf_path: str | None = None,
+    *,
+    storage_backend: str | None = None,
+    local_root: str | None = None,
 ) -> tuple[dict[str, Any], list[DatasetSpec]]:
-    """Validate one openpi YAML and expand it into remote dataset specs."""
+    """Validate one OpenPI YAML and expand it into SDK or local dataset specs."""
     config = read_openpi_petrel_config(config_path)
     effective_conf = conf_path or config["petrel_conf"]
     args = argparse.Namespace(
@@ -3711,7 +3769,90 @@ def load_dataset_specs(
         name="openpi_petrel",
         conf=str(Path(effective_conf).expanduser()),
     )
-    return config, _load_specs(args, config)
+    specs = _load_specs(args, config)
+    storage = config["storage"]
+    backend = str(storage_backend or storage.get("backend", "sdk")).lower()
+    if backend not in {"sdk", "local"}:
+        raise ValueError(f"storage_backend must be 'sdk' or 'local', got {backend!r}.")
+    storage["backend"] = backend
+    if backend == "sdk":
+        return config, specs
+
+    configured_root = local_root or storage.get("local_root")
+    if not configured_root:
+        raise ValueError("Local storage requires local_root in YAML or the command-line override.")
+    resolved_root = Path(str(configured_root)).expanduser().resolve()
+    if not resolved_root.is_dir():
+        raise FileNotFoundError(f"Local dataset root does not exist or is not a directory: {resolved_root}")
+    remote_prefix = str(storage.get("local_remote_prefix") or "").rstrip("/")
+    if not remote_prefix:
+        raise ValueError("Local storage requires storage.local_remote_prefix in the dataset YAML.")
+
+    local_specs: list[DatasetSpec] = []
+    missing_local_roots: list[Path] = []
+    local_children: dict[Path, set[str]] = {}
+    projection = str(config["openpi"].get("control_projection", "compact_valid"))
+    for spec in specs:
+        remote_root = spec.remote_root.rstrip("/")
+        if remote_root == remote_prefix:
+            relative = ""
+        elif remote_root.startswith(remote_prefix + "/"):
+            relative = remote_root[len(remote_prefix) + 1 :]
+        else:
+            raise ValueError(
+                f"Dataset root {remote_root!r} is outside configured local_remote_prefix {remote_prefix!r}."
+            )
+        local_dataset_root = resolved_root / relative
+        parent = local_dataset_root.parent
+        if parent not in local_children:
+            try:
+                local_children[parent] = {entry.name for entry in os.scandir(parent) if entry.is_dir()}
+            except OSError:
+                local_children[parent] = set()
+        if local_dataset_root.name not in local_children[parent]:
+            missing_local_roots.append(local_dataset_root)
+            continue
+        cache_namespace = f"local-{hashlib.sha256(str(resolved_root).encode()).hexdigest()[:12]}"
+        local_meta_dir = str(Path(spec.local_meta_dir) / cache_namespace) if spec.local_meta_dir else None
+        path_index_dir = str(Path(spec.path_index_dir) / cache_namespace) if spec.path_index_dir else None
+        canonical_adapter = spec.canonical_adapter
+        if projection == "pi05_aloha_32" and isinstance(canonical_adapter, dict):
+            canonical_adapter = dict(canonical_adapter)
+            slots = canonical_adapter.get("slots")
+            if isinstance(slots, dict):
+                canonical_adapter["slots"] = {
+                    slot_name: {
+                        component_name: component
+                        for component_name, component in slot.items()
+                        if component_name in {"joint", "gripper", "pad"}
+                    }
+                    for slot_name, slot in slots.items()
+                    if isinstance(slot, dict)
+                }
+        local_specs.append(
+            replace(
+                spec,
+                remote_root=str(local_dataset_root),
+                storage_backend="local",
+                local_root=str(resolved_root),
+                local_meta_dir=local_meta_dir,
+                path_index_dir=path_index_dir,
+                canonical_adapter=canonical_adapter,
+                # The local mirror may use a different LeRobot generation than the SDK object.
+                # Detect v2/v3 from its own meta/info.json instead of forcing the remote YAML value.
+                format_version=None,
+            )
+        )
+    if not local_specs:
+        raise FileNotFoundError(f"No configured dataset directories were found under {resolved_root}.")
+    if missing_local_roots:
+        print(
+            f"[LocalFileClient] using {len(local_specs)}/{len(specs)} configured datasets under {resolved_root}; "
+            f"skipped {len(missing_local_roots)} missing dataset roots",
+            flush=True,
+        )
+    storage["local_root"] = str(resolved_root)
+    return config, local_specs
 
 
 def _get_nested(config: dict[str, Any], section: str, key: str, default: Any) -> Any:
@@ -4107,7 +4248,7 @@ def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> l
     if not isinstance(sources, list):
         return None
 
-    remotes = config.get("remotes", {}) if isinstance(config.get("remotes"), dict) else {}  
+    remotes = config.get("remotes", {}) if isinstance(config.get("remotes"), dict) else {}
     cache_templates = config.get("cache_templates", {}) if isinstance(config.get("cache_templates"), dict) else {}
     dataset_defaults = config.get("dataset_defaults", {}) if isinstance(config.get("dataset_defaults"), dict) else {}
     weight_config = config.get("dataset_weights", {}) if isinstance(config.get("dataset_weights"), dict) else {}
@@ -4194,7 +4335,7 @@ def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> l
                     "text_embedding_cache_dir",
                     emb_cfg.get("local_text_embedding_cache_dir", emb_cfg.get("text_embedding_cache_dir")),
                 ),
-            ),  # None
+            ), # None
             "local_meta_dir_template": source.get(
                 "local_meta_dir_template", emb_cfg.get("local_meta_dir_template", cache_templates.get("local_meta_dir"))
             ),  #  openpi/configs/petrel/pi05_petrel.yaml-storage-metadata_cache
@@ -4210,7 +4351,7 @@ def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> l
                 emb_cfg.get(
                     "local_text_embedding_cache_dir_template", cache_templates.get("local_text_embedding_cache_dir")
                 ),
-            ), # None
+            ),  # None
             "context_len": source.get("context_len", emb_cfg.get("context_len", 128)),  # 128
             "text_encoder_id": source.get("text_encoder_id", emb_cfg.get("text_encoder_id", "wan22ti2v5b")),
             "modalities": source_modalities,   # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/mapping+mapping_overrides)
@@ -4299,6 +4440,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--name", default="remote_dataset")
     parser.add_argument("--conf", default=PETRELOSS_CONF)
+    parser.add_argument("--storage-backend", choices=["sdk", "local"], default=None)
+    parser.add_argument("--local-root", default=None, help="Local replacement for storage.local_remote_prefix.")
     parser.add_argument(
         "--dataset-specs-json",
         default=None,
@@ -4349,7 +4492,12 @@ def main() -> None:
     _PROFILE_ENABLED = bool(args.profile)
     t_main = time.perf_counter()
     if args.dataset_config is not None:
-        config, specs = load_dataset_specs(args.dataset_config, args.conf)
+        config, specs = load_dataset_specs(
+            args.dataset_config,
+            args.conf,
+            storage_backend=args.storage_backend,
+            local_root=args.local_root,
+        )
     else:
         config = {}
         specs = _load_specs(args, config)

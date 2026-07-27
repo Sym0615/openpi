@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
+from openpi import transforms
+from openpi.shared import normalize
 from openpi.training import petrel_dataset
 
 
@@ -60,7 +62,7 @@ class _FakeMixedDataset:
 
 def _fake_reader(action_dim=8):
     return SimpleNamespace(
-        load_dataset_specs=lambda path, conf: (
+        load_dataset_specs=lambda path, conf, **kwargs: (
             {
                 "openpi": {
                     "state_dim": action_dim,
@@ -241,6 +243,110 @@ def test_compact_projection_preserves_all_actions_before_state_only_dims(monkeyp
     torch.testing.assert_close(actions[0, 28:], torch.zeros(4))
 
 
+def _canonical_arm_item(*, joint_count: int, single_right: bool = False) -> dict:
+    state = torch.zeros(1, 80, dtype=torch.float32)
+    actions = torch.zeros(3, 80, dtype=torch.float32)
+    state_padding = torch.ones(80, dtype=torch.bool)
+    action_padding = torch.ones(80, dtype=torch.bool)
+    identity_rot6d = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+
+    sides = ((40, 47, 56, 14),) if single_right else ((0, 7, 16, 7), (40, 47, 56, 14))
+    for joint_start, ee_start, gripper_index, value_base in sides:
+        state[..., joint_start : joint_start + joint_count] = torch.arange(joint_count) + value_base
+        actions[..., joint_start : joint_start + joint_count] = torch.arange(joint_count) + value_base + 100
+        state_padding[joint_start : joint_start + joint_count] = False
+        action_padding[joint_start : joint_start + joint_count] = False
+
+        state[..., ee_start : ee_start + 3] = torch.tensor([1.0, 2.0, 3.0]) + value_base
+        state[..., ee_start + 3 : ee_start + 9] = identity_rot6d
+        actions[..., ee_start : ee_start + 6] = torch.arange(6) + value_base + 200
+        state_padding[ee_start : ee_start + 9] = False
+        action_padding[ee_start : ee_start + 6] = False
+
+        state[..., gripper_index] = value_base + 30
+        actions[..., gripper_index] = value_base + 300
+        state_padding[gripper_index] = False
+        action_padding[gripper_index] = False
+
+    return {
+        "dataset_name": "semantic_arm",
+        "observation.state": state,
+        "action": actions,
+        "observation.state_dim_is_pad": state_padding,
+        "action_dim_is_pad": action_padding,
+    }
+
+
+def test_pi05_aloha_32_matches_official_aloha_slots_across_embodiments():
+    dual6_state, dual6_actions = petrel_dataset.project_petrel_features(
+        _canonical_arm_item(joint_count=6), output_dim=32, projection="pi05_aloha_32"
+    )
+    dual7_state, dual7_actions = petrel_dataset.project_petrel_features(
+        _canonical_arm_item(joint_count=7), output_dim=32, projection="pi05_aloha_32"
+    )
+    single_state, single_actions = petrel_dataset.project_petrel_features(
+        _canonical_arm_item(joint_count=7, single_right=True), output_dim=32, projection="pi05_aloha_32"
+    )
+
+    assert dual6_state.shape == dual7_state.shape == single_state.shape == (1, 14)
+    assert dual6_actions.shape == dual7_actions.shape == single_actions.shape == (3, 14)
+
+    # The first six joints and grippers are stable even when the source robot has a seventh joint.
+    torch.testing.assert_close(dual6_state, dual7_state)
+    torch.testing.assert_close(dual6_actions, dual7_actions)
+    expected = _canonical_arm_item(joint_count=6)
+    torch.testing.assert_close(dual6_state[0, 0:6], expected["observation.state"][0, 0:6])
+    assert dual6_state[0, 6] == expected["observation.state"][0, 16]
+    torch.testing.assert_close(dual6_state[0, 7:13], expected["observation.state"][0, 40:46])
+    assert dual6_state[0, 13] == expected["observation.state"][0, 56]
+
+    # A single right arm occupies ALOHA's right slots 7..13; left slots and padding stay zero.
+    torch.testing.assert_close(single_state[0, :7], torch.zeros(7))
+    torch.testing.assert_close(single_actions[0, :7], torch.zeros(7))
+    assert single_actions[0, 7] != 0
+    assert single_actions[0, 13] != 0
+
+
+def test_pi05_aloha_32_excludes_ee_and_seventh_joint_controls():
+    item = _canonical_arm_item(joint_count=7)
+    state, actions = petrel_dataset.project_petrel_features(item, output_dim=32, projection="pi05_aloha_32")
+
+    item["observation.state"][..., [6, 46]] = 9999
+    item["action"][..., [6, 46]] = 9999
+    item["observation.state"][..., 7:16] = 9999
+    item["observation.state"][..., 47:56] = 9999
+    item["action"][..., 7:13] = 9999
+    item["action"][..., 47:53] = 9999
+    state_with_ignored_values, actions_with_ignored_values = petrel_dataset.project_petrel_features(
+        item, output_dim=32, projection="pi05_aloha_32"
+    )
+
+    torch.testing.assert_close(state_with_ignored_values, state)
+    torch.testing.assert_close(actions_with_ignored_values, actions)
+
+
+def test_pi05_aloha_32_normalizes_14d_before_model_padding():
+    state, actions = petrel_dataset.project_petrel_features(
+        _canonical_arm_item(joint_count=6), output_dim=32, projection="pi05_aloha_32"
+    )
+    assert petrel_dataset.projected_feature_dim(32, "pi05_aloha_32") == 14
+
+    stats = normalize.NormStats(
+        mean=np.zeros(14),
+        std=np.ones(14),
+        q01=np.zeros(14),
+        q99=np.ones(14),
+    )
+    data = {"state": state[0].numpy(), "actions": actions.numpy()}
+    data = transforms.Normalize({"state": stats, "actions": stats}, use_quantiles=True)(data)
+    data = transforms.PadStatesAndActions(32)(data)
+
+    assert data["state"].shape == (32,)
+    assert data["actions"].shape == (3, 32)
+    np.testing.assert_array_equal(data["state"][14:], np.zeros(18))
+    np.testing.assert_array_equal(data["actions"][:, 14:], np.zeros((3, 18)))
+
+
 def test_petrel_s3_url_parser():
     target = petrel_dataset.reader._parse_petrel_s3_url(  # noqa: SLF001
         "manip:bucket/path/to/meta/info.json"
@@ -251,7 +357,7 @@ def test_petrel_s3_url_parser():
     assert target.key == "path/to/meta/info.json"
 
 
-def test_openpi_petrel_v1_schema_translation(tmp_path):
+def test_openpi_petrel_v1_schema_translation_and_local_backend(tmp_path):
     dataset_dir = tmp_path / "datasets"
     dataset_dir.mkdir()
     (dataset_dir / "task_a.yaml").write_text(
@@ -298,7 +404,10 @@ openpi:
     slots: [base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb]
 storage:
   petrel_conf: ~/petreloss.conf
+  local_remote_prefix: example:s3://bucket/root
   parquet_cache_size: 2
+  metadata_cache: cache/meta/{remote}
+  path_index_cache: cache/{remote}
 sampling:
   state_frames: 1
   action_horizon: 16
@@ -323,6 +432,43 @@ dataset_files:
     assert translated["sources"][0]["adapter"] == "single_arm"
     assert translated["sources"][0]["datasets"] == [{"dir": "task_a", "name": "task_a"}]
     assert translated["dataset_weights"]["source_files"] == {"single": 1.0}
+
+    local_root = tmp_path / "local_data"
+    local_dataset = local_root / "task_a"
+    (local_dataset / "meta").mkdir(parents=True)
+    (local_dataset / "meta/info.json").write_text("{}", encoding="utf-8")
+    payload_path = local_dataset / "payload.bin"
+    payload_path.write_bytes(b"local-only")
+    local_config, local_specs = petrel_dataset.reader.load_dataset_specs(
+        config_path,
+        storage_backend="local",
+        local_root=str(local_root),
+    )
+
+    assert local_config["storage"]["backend"] == "local"
+    assert local_specs[0].remote_root == str(local_dataset)
+    assert local_specs[0].storage_backend == "local"
+    assert local_specs[0].format_version is None
+    assert "/local-" in local_specs[0].local_meta_dir
+    assert "/local-" in local_specs[0].path_index_dir
+
+    dataset = object.__new__(petrel_dataset.reader.PetrelLeRobotDataset)
+    dataset.spec = dataclasses.replace(local_specs[0], local_meta_dir=str(tmp_path / "meta_cache"))
+    dataset.name = local_specs[0].name
+    dataset.remote_root = local_specs[0].remote_root
+    dataset._client = None  # noqa: SLF001
+    assert isinstance(dataset.client, petrel_dataset.reader.LocalFileClient)
+    assert dataset.client.get_bytes(str(payload_path)) == b"local-only"
+    outside_path = tmp_path / "outside.bin"
+    outside_path.write_bytes(b"outside")
+    with np.testing.assert_raises(ValueError):
+        dataset.client.get_bytes(str(outside_path))
+
+    first_read = dataset._read_bytes("meta/info.json")  # noqa: SLF001
+    (local_dataset / "meta/info.json").write_text('{"changed": true}', encoding="utf-8")
+    second_read = dataset._read_bytes("meta/info.json")  # noqa: SLF001
+    assert first_read == second_read == b"{}"
+    assert (tmp_path / "meta_cache/info.json").read_bytes() == b"{}"
 
 
 def test_openpi_petrel_metadata_does_not_scan_dataset_groups(tmp_path):
@@ -362,6 +508,7 @@ def test_pi05_petrel_yaml_expands_all_repository_datasets():
     assert all(spec.modalities for spec in specs)
     assert all(spec.canonical_adapter for spec in specs)
     assert all(spec.dataset_weight > 0 for spec in specs)
+    assert all(spec.storage_backend == "sdk" for spec in specs)
     assert {spec.source_name for spec in specs} >= {
         "a1_articulation_franka",
         "intern_m1",
@@ -376,6 +523,7 @@ def test_pi05_interna1_yaml_only_expands_intern_a1():
     config, specs = petrel_dataset.reader.load_dataset_specs("configs/petrel/pi05_interna1.yaml")
 
     assert config["dataset_id"] == "intern_a1"
+    assert config["openpi"]["control_projection"] == "pi05_aloha_32"
     assert config["dataset_weights"]["source_files"] == {"intern_a1": 1.0}
     assert specs
     assert {source["_source_file"] for source in config["sources"]} == {"intern_a1"}
@@ -430,6 +578,8 @@ def test_pi05_interna1_data_config_uses_separate_norm_asset(tmp_path):
     assert data_config.asset_id == "intern_a1"
     assert data_config.petrel is not None
     assert data_config.petrel.dataset_config == "configs/petrel/pi05_interna1.yaml"
+    assert train_config.pytorch_weight_path == "/datahub/public/model/pi05_base_pytorch_bf16"
+    assert train_config.pytorch_training_precision == "bfloat16"
 
 
 def test_norm_stats_merge_multiple_dataset_batches_into_standard_global_format():

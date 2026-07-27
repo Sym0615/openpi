@@ -42,7 +42,7 @@ norm stats 走独立的无图像快速路径：
 
 ```text
 YAML -> episode 计划 -> 每个 episode 一次读取 parquet
-     -> 批量构造窗口 -> 32D 投影 -> 多进程统计合并
+     -> 批量构造窗口 -> 配置对应的投影 -> 多进程统计合并
      -> assets/<config>/<dataset_id>/norm_stats.json
 ```
 
@@ -106,7 +106,7 @@ YAML -> episode 计划 -> 每个 episode 一次读取 parquet
 - `PetrelDatasetConfig`：定义 YAML 路径、Petrel 配置覆盖、prompt 模板、图像开关、坏视频重试等运行参数。
 - `PetrelDataset`：将 reader 输出转换为 OpenPI 原生样本 schema。
 - `read_petrel_dataset_metadata()`：只读本地 YAML contract，不访问远端数据。
-- `project_petrel_features()`：把不同机器人的 canonical 控制向量压缩/补零到 PI0.5 的固定 32D 空间。
+- `project_petrel_features()`：按配置选择 compact projection，或把 InternA1 canonical 控制向量映射到官方 ALOHA 14D 语义空间。
 
 OpenPI 输出约定为：
 
@@ -121,13 +121,18 @@ image:
 image_mask:  每个相机是否真实存在
 ```
 
-32D compact projection 的规则是：
+默认 `compact_valid` projection 的规则是：
 
 1. 优先保留所有有效 action 维度。
 2. 剩余空间可加入只存在于 state 的维度。
 3. 不足 32D 的尾部补零。
 4. padding mask 对应的 state/action 数值强制置零。
 5. 如果某数据集有效 action 维度超过 32，直接报错，避免静默截断训练目标。
+
+`pi05_interna1` 使用 `pi05_aloha_32`，与官方 ALOHA 顺序一致：左 6 joint、左 gripper、
+右 6 joint、右 gripper 占用前 14D。canonical EE 和第七关节不进入该布局；单右臂 Franka
+固定使用 `7..13` 右臂区域。该投影返回 14D 并计算 14D norm stats；归一化后由 OpenPI 的
+`PadStatesAndActions(32)` 将 `14..31` 补零，避免 padding 被 quantile normalization 改成 `-1`。
 
 图像侧新增批量读取优化：同一个 batch 中属于同一 dataset/episode 的样本会合并 MP4 请求并批量解码；失败时再退回逐样本重试。缺失相机使用零图填充，并通过 `image_mask` 告知模型。
 
@@ -290,7 +295,7 @@ Petrel 路径的主要变化：
 2. 未设置 `max_frames` 时处理全部合法窗口。
 3. 设置 `max_frames` 时，以确定性随机 episode block 选满全局窗口上限。
 4. 将 episode 计划分配给多个 worker。
-5. 每个 worker 按 episode 读取 Parquet，批量生成窗口并调用与训练相同的 32D projection。
+5. 每个 worker 按 episode 读取 Parquet，批量生成窗口并调用与训练相同的 projection。
 6. 使用可合并的 streaming count/sum/sum-square 计算 mean/std。
 7. 使用 reservoir sampling 估计 q01/q99。
 8. 主进程合并 worker 统计量并保存为 OpenPI `NormStats`。
@@ -308,10 +313,10 @@ Petrel 路径的主要变化：
 
 其中：
 
-- state 每个训练窗口贡献一个 32D row。
-- actions 每个训练窗口贡献 16 个 32D row。
+- `compact_valid` 下 state 每个窗口贡献一个 32D row，actions 每个窗口贡献 16 个 32D row。
+- `pi05_interna1` 下对应 row 为 14D；归一化后才补到模型的 32D contract。
 - 多数据集配置最终仍生成一组全局 state stats 和一组全局 action stats，不按机器人分别保存。
-- `pi05_interna1` 会把 InternA1 中所有机器人投影到共同 32D 空间后混合统计。
+- `pi05_interna1` 会按 `pi05_aloha_32` 的官方 ALOHA 14D 顺序投影后混合统计。
 
 保存位置：
 
@@ -405,7 +410,7 @@ jobs/
 ## 13. 当前限制和注意事项
 
 1. **norm stats 是全局统计。** 一个 config/`repo_id` 只对应一组 stats；InternA1 内不同机器人不会分别归一化。
-2. **固定 32D contract。** 当前 PI0.5 checkpoint 和 YAML 按 32D 配置；超过 32 个有效 action 维度的数据会报错。
+2. **固定 32D contract。** `pi05_interna1` 当前只映射每臂前 6 个 joint 和 gripper；EE、第七关节和 hand 不会进入该投影。
 3. **固定三相机槽。** 多余相机目前不会进入模型，缺少的槽位用零图和 mask 表示。
 4. **norm stats 未纳入 Git。** 新环境必须准备对应 JSON，否则训练初始化会失败。
 5. **远程 SDK 依赖环境。** 强制 `petrel_client` 时需保证 SDK、`petreloss.conf` 和兼容 native library 在容器内可见。

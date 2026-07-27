@@ -185,7 +185,7 @@ class DataConfigFactory(abc.ABC):
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
         asset_id = self.assets.asset_id or repo_id
         # DataConfig()
-        return dataclasses.replace(        
+        return dataclasses.replace(
             self.base_config or DataConfig(),
             repo_id=repo_id,
             asset_id=asset_id,
@@ -564,6 +564,14 @@ class TrainConfig:
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
+    # Optional single-process performance profiling. Disabled for normal training.
+    profiling_enabled: bool = False
+    profiling_warmup_steps: int = 20
+    profiling_log_interval: int = 10
+    profiling_torch_trace: bool = False
+    profiling_trace_active_steps: int = 20
+    gpu_monitor_interval_s: float = 1.0
+
     # How often (in steps) to log training metrics.
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
@@ -608,6 +616,15 @@ class TrainConfig:
     def __post_init__(self) -> None:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
+        if self.profiling_enabled:
+            if self.profiling_warmup_steps < 0:
+                raise ValueError("profiling_warmup_steps must be non-negative")
+            if self.profiling_log_interval <= 0:
+                raise ValueError("profiling_log_interval must be positive")
+            if self.profiling_trace_active_steps <= 0:
+                raise ValueError("profiling_trace_active_steps must be positive")
+            if self.gpu_monitor_interval_s <= 0:
+                raise ValueError("gpu_monitor_interval_s must be positive")
 
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -968,6 +985,8 @@ _CONFIGS = [
             dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_interna1.yaml"),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/datahub/public/model/pi05_base_pytorch_bf16",
+        pytorch_training_precision="bfloat16",
         num_workers=0,
     ),
     TrainConfig(

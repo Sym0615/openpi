@@ -7,6 +7,7 @@ to the config assets directory.
 
 import dataclasses
 import pathlib
+from typing import Literal
 
 import numpy as np
 import tqdm
@@ -111,6 +112,8 @@ def main(
     petrel_num_workers: int = 32,
     petrel_episode_batch_size: int = 4096,
     petrel_reservoir_rows: int = 200000,
+    petrel_storage_backend: Literal["sdk", "local"] | None = None,
+    petrel_local_root: str | None = None,
     output_dir: str | None = None,
 ):
     config = _config.get_config(config_name)
@@ -127,6 +130,8 @@ def main(
             episode_batch_size=petrel_episode_batch_size,
             reservoir_rows=petrel_reservoir_rows,
             conf_path=data_config.petrel.conf_path,
+            storage_backend=petrel_storage_backend or data_config.petrel.storage_backend,
+            local_root=petrel_local_root or data_config.petrel.local_root,
         )
         assets_dir = config.assets_dirs if output_dir is None else pathlib.Path(output_dir)
         output_path = assets_dir / data_config.repo_id

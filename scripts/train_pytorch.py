@@ -25,6 +25,7 @@ Multi-Node Training:
 
 import dataclasses
 import gc
+import json
 import logging
 import os
 import platform
@@ -43,6 +44,7 @@ import wandb
 import openpi.models.pi0_config
 import openpi.models_pytorch.pi0_pytorch
 import openpi.shared.normalize as _normalize
+from openpi.training import profiling as _profiling
 import openpi.training.config as _config
 import openpi.training.data_loader as _data
 
@@ -306,10 +308,35 @@ def log_memory_usage(device, step, phase="unknown"):
     )
 
 
+def start_cuda_phase(
+    name: str,
+    events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]],
+    *,
+    profiling_enabled: bool,
+    device: torch.device,
+) -> float:
+    cpu_started = time.perf_counter()
+    if profiling_enabled and device.type == "cuda":
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+        events[name] = (start_event, end_event)
+    return cpu_started
+
+
+def end_cuda_phase(
+    name: str, cpu_started: float, events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]]
+) -> float:
+    if name in events:
+        events[name][1].record()
+    return (time.perf_counter() - cpu_started) * 1000.0
+
+
 def train_loop(config: _config.TrainConfig):
     use_ddp, local_rank, device = setup_ddp()
     is_main = (not use_ddp) or (dist.get_rank() == 0)
     set_seed(config.seed, local_rank)
+    _profiling.set_enabled(enabled=config.profiling_enabled)
 
     # Initialize checkpoint directory and wandb
     resuming = False
@@ -341,6 +368,23 @@ def train_loop(config: _config.TrainConfig):
     else:
         # For resume, checkpoint_dir is already set to the experiment directory
         logging.info(f"Using existing experiment checkpoint directory: {config.checkpoint_dir}")
+
+    profile_dir = config.checkpoint_dir / "profiling"
+    profile_metrics_path = profile_dir / "step_metrics.jsonl"
+    data_metrics_path = profile_dir / "data_metrics.jsonl"
+    gpu_monitor = None
+    if config.profiling_enabled and is_main:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
+        gpu_index = visible_devices[0].strip() if visible_devices and visible_devices[0].strip() else 0
+        gpu_monitor = _profiling.GpuMonitor(profile_dir / "gpu_metrics.csv", gpu_index, config.gpu_monitor_interval_s)
+        gpu_monitor.start()
+        logging.info("Profiling enabled; outputs will be written to %s", profile_dir)
+        if config.num_workers > 0:
+            logging.warning(
+                "Detailed access/preprocessing counters are process-local. For exact stage attribution use "
+                "num_workers=0; use num_workers>0 runs to measure end-to-end DataLoader throughput."
+            )
 
     # Initialize wandb (only on main process)
     if is_main:
@@ -499,6 +543,28 @@ def train_loop(config: _config.TrainConfig):
         logging.info("EMA is not supported for PyTorch training")
         logging.info(f"Training precision: {model_cfg.dtype}")
 
+    torch_profiler = None
+    if config.profiling_enabled and config.profiling_torch_trace and is_main:
+        trace_dir = profile_dir / "torch_trace"
+        profiler_activities = [torch.profiler.ProfilerActivity.CPU]
+        if device.type == "cuda":
+            profiler_activities.append(torch.profiler.ProfilerActivity.CUDA)
+        torch_profiler = torch.profiler.profile(
+            activities=profiler_activities,
+            schedule=torch.profiler.schedule(
+                wait=config.profiling_warmup_steps,
+                warmup=1,
+                active=config.profiling_trace_active_steps,
+                repeat=1,
+            ),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(trace_dir)),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=False,
+        )
+        torch_profiler.start()
+        logging.info("PyTorch trace enabled; trace directory: %s", trace_dir)
+
     # Training loop - iterate until we reach num_train_steps
     pbar = (
         tqdm.tqdm(total=config.num_train_steps, initial=global_step, desc="Training", disable=not is_main)
@@ -506,114 +572,166 @@ def train_loop(config: _config.TrainConfig):
         else None
     )
 
+    data_iter = iter(loader)
+    logging_interval = config.profiling_log_interval if config.profiling_enabled else config.log_interval
     while global_step < config.num_train_steps:
-        # Set epoch for distributed training
-        if use_ddp and hasattr(loader, "set_epoch"):
-            loader.set_epoch(global_step // len(loader))
+        step_started = time.perf_counter()
+        data_started = time.perf_counter()
+        observation, actions = next(data_iter)
+        data_wait_ms = (time.perf_counter() - data_started) * 1000.0
 
-        for observation, actions in loader:
-            # Check if we've reached the target number of steps
-            if global_step >= config.num_train_steps:
-                break
+        cuda_events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]] = {}
 
-            # The unified data loader returns (observation, actions) tuple
-            observation = jax.tree.map(lambda x: x.to(device), observation)  # noqa: PLW2901
-            actions = actions.to(torch.float32)  # noqa: PLW2901
-            actions = actions.to(device)  # noqa: PLW2901
+        # The unified data loader returns (observation, actions) tuple.
+        phase_started = start_cuda_phase("h2d", cuda_events, profiling_enabled=config.profiling_enabled, device=device)
+        observation = jax.tree.map(lambda x: x.to(device, non_blocking=True), observation)
+        actions = actions.to(device=device, dtype=torch.float32, non_blocking=True)
+        phase_cpu_ms = {"h2d": end_cuda_phase("h2d", phase_started, cuda_events)}
 
-            # Update LR
-            for pg in optim.param_groups:
-                pg["lr"] = lr_schedule(global_step)
+        for pg in optim.param_groups:
+            pg["lr"] = lr_schedule(global_step)
 
-            # Forward pass
-            losses = model(observation, actions)
-            # Ensure losses is a tensor and handle different return types
-            if isinstance(losses, list | tuple):
-                losses = torch.stack(losses)
-            elif not isinstance(losses, torch.Tensor):
-                losses = torch.tensor(losses, device=device, dtype=torch.float32)
+        phase_started = start_cuda_phase(
+            "forward", cuda_events, profiling_enabled=config.profiling_enabled, device=device
+        )
+        losses = model(observation, actions)
+        if isinstance(losses, list | tuple):
+            losses = torch.stack(losses)
+        elif not isinstance(losses, torch.Tensor):
+            losses = torch.tensor(losses, device=device, dtype=torch.float32)
+        loss = losses.mean()
+        phase_cpu_ms["forward"] = end_cuda_phase("forward", phase_started, cuda_events)
 
-            loss = losses.mean()
+        phase_started = start_cuda_phase(
+            "backward", cuda_events, profiling_enabled=config.profiling_enabled, device=device
+        )
+        loss.backward()
+        phase_cpu_ms["backward"] = end_cuda_phase("backward", phase_started, cuda_events)
 
-            # Backward pass
-            loss.backward()
+        if global_step < 5 and is_main and torch.cuda.is_available():
+            log_memory_usage(device, global_step, "after_backward")
 
-            # Log memory usage after backward pass
-            if global_step < 5 and is_main and torch.cuda.is_available():
-                log_memory_usage(device, global_step, "after_backward")
+        phase_started = start_cuda_phase(
+            "optimizer", cuda_events, profiling_enabled=config.profiling_enabled, device=device
+        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.optimizer.clip_gradient_norm)
+        optim.step()
+        optim.zero_grad(set_to_none=True)
+        phase_cpu_ms["optimizer"] = end_cuda_phase("optimizer", phase_started, cuda_events)
 
-            # Gradient clipping
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.optimizer.clip_gradient_norm)
+        for param in model.parameters():
+            if param.grad is not None:
+                param.grad.detach_()
+                param.grad = None
 
-            # Optimizer step
-            optim.step()
-            optim.zero_grad(set_to_none=True)
+        profile_values: dict[str, float] = {}
+        if config.profiling_enabled:
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+                profile_values = {
+                    f"{name}_ms": events[0].elapsed_time(events[1]) for name, events in cuda_events.items()
+                }
+            else:
+                profile_values = {f"{name}_ms": value for name, value in phase_cpu_ms.items()}
+            profile_values["data_wait_ms"] = data_wait_ms
+            profile_values["step_ms"] = (time.perf_counter() - step_started) * 1000.0
+            profile_values["samples_per_second"] = effective_batch_size / max(profile_values["step_ms"] / 1000.0, 1e-9)
 
-            # Clear gradients more aggressively
-            for param in model.parameters():
-                if param.grad is not None:
-                    param.grad.detach_()
-                    param.grad = None
+        if is_main:
+            infos.append(
+                {
+                    "loss": loss.item(),
+                    "learning_rate": optim.param_groups[0]["lr"],
+                    "grad_norm": float(grad_norm) if isinstance(grad_norm, torch.Tensor) else grad_norm,
+                    **profile_values,
+                }
+            )
 
-            # Collect stats
+        if config.profiling_enabled and global_step + 1 == config.profiling_warmup_steps:
+            _profiling.snapshot(reset=True)
+            if gpu_monitor is not None:
+                gpu_monitor.summary(reset=True)
             if is_main:
-                infos.append(
-                    {
-                        "loss": loss.item(),
-                        "learning_rate": optim.param_groups[0]["lr"],
-                        "grad_norm": float(grad_norm) if isinstance(grad_norm, torch.Tensor) else grad_norm,
-                    }
-                )
-
-            if is_main and (global_step % config.log_interval == 0):
-                elapsed = time.time() - start_time
-
-                # Average stats over log interval
-                avg_loss = sum(info["loss"] for info in infos) / len(infos)
-                avg_lr = sum(info["learning_rate"] for info in infos) / len(infos)
-
-                avg_grad_norm = None
-                if any("grad_norm" in info for info in infos):
-                    vals = [
-                        info["grad_norm"] for info in infos if "grad_norm" in info and info["grad_norm"] is not None
-                    ]
-                    if len(vals) > 0:
-                        avg_grad_norm = sum(vals) / len(vals)
-                logging.info(
-                    f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} grad_norm={avg_grad_norm:.2f} time={elapsed:.1f}s"
-                    if avg_grad_norm is not None
-                    else f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} time={elapsed:.1f}s"
-                )
-
-                # Log to wandb
-                if config.wandb_enabled and len(infos) > 0:
-                    log_payload = {
-                        "loss": avg_loss,
-                        "learning_rate": avg_lr,
-                        "step": global_step,
-                        "time_per_step": elapsed / config.log_interval,
-                    }
-                    if avg_grad_norm is not None:
-                        log_payload["grad_norm"] = avg_grad_norm
-                    wandb.log(log_payload, step=global_step)
-
+                infos = []
                 start_time = time.time()
-                infos = []  # Reset stats collection
 
-            global_step += 1
-            # Save checkpoint using the new mechanism
-            save_checkpoint(model, optim, global_step, config, is_main, data_config)
+        if is_main and infos and (global_step % logging_interval == 0):
+            elapsed = time.time() - start_time
+            avg_loss = sum(info["loss"] for info in infos) / len(infos)
+            avg_lr = sum(info["learning_rate"] for info in infos) / len(infos)
+            grad_norms = [info["grad_norm"] for info in infos if info.get("grad_norm") is not None]
+            avg_grad_norm = sum(grad_norms) / len(grad_norms) if grad_norms else None
+            logging.info(
+                f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} grad_norm={avg_grad_norm:.2f} time={elapsed:.1f}s"
+                if avg_grad_norm is not None
+                else f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} time={elapsed:.1f}s"
+            )
 
-            # Update progress bar
-            if pbar is not None:
-                pbar.update(1)
-                pbar.set_postfix(
-                    {"loss": f"{loss.item():.4f}", "lr": f"{optim.param_groups[0]['lr']:.2e}", "step": global_step}
+            if config.profiling_enabled and global_step >= config.profiling_warmup_steps:
+                profile_keys = (
+                    "data_wait_ms",
+                    "h2d_ms",
+                    "forward_ms",
+                    "backward_ms",
+                    "optimizer_ms",
+                    "step_ms",
+                    "samples_per_second",
                 )
+                averages = {key: sum(float(info.get(key, 0.0)) for info in infos) / len(infos) for key in profile_keys}
+                gpu_values = gpu_monitor.summary(reset=True) if gpu_monitor is not None else {}
+                profile_payload = {"step": global_step, **averages, **gpu_values}
+                logging.info(
+                    "profile step=%d samples/s=%.2f data_wait=%.1fms h2d=%.1fms forward=%.1fms "
+                    "backward=%.1fms optimizer=%.1fms step=%.1fms gpu_util=%.1f%%",
+                    global_step,
+                    averages["samples_per_second"],
+                    averages["data_wait_ms"],
+                    averages["h2d_ms"],
+                    averages["forward_ms"],
+                    averages["backward_ms"],
+                    averages["optimizer_ms"],
+                    averages["step_ms"],
+                    gpu_values.get("gpu_util_avg", float("nan")),
+                )
+                with profile_metrics_path.open("a", encoding="utf-8") as output:
+                    output.write(json.dumps(profile_payload, ensure_ascii=False) + "\n")
+                data_payload = {"step": global_step, "events": _profiling.snapshot(reset=True)}
+                with data_metrics_path.open("a", encoding="utf-8") as output:
+                    output.write(json.dumps(data_payload, ensure_ascii=False) + "\n")
+
+            if config.wandb_enabled:
+                log_payload = {
+                    "loss": avg_loss,
+                    "learning_rate": avg_lr,
+                    "step": global_step,
+                    "time_per_step": elapsed / logging_interval,
+                }
+                if avg_grad_norm is not None:
+                    log_payload["grad_norm"] = avg_grad_norm
+                wandb.log(log_payload, step=global_step)
+
+            start_time = time.time()
+            infos = []
+
+        global_step += 1
+        if torch_profiler is not None:
+            torch_profiler.step()
+        save_checkpoint(model, optim, global_step, config, is_main, data_config)
+
+        if pbar is not None:
+            pbar.update(1)
+            pbar.set_postfix(
+                {"loss": f"{loss.item():.4f}", "lr": f"{optim.param_groups[0]['lr']:.2e}", "step": global_step}
+            )
 
     # Close progress bar
     if pbar is not None:
         pbar.close()
+
+    if torch_profiler is not None:
+        torch_profiler.stop()
+    if gpu_monitor is not None:
+        gpu_monitor.stop()
 
     # Finish wandb run
     if is_main and config.wandb_enabled:

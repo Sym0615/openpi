@@ -137,8 +137,11 @@ one category weight.
 
 pi05_interna1 loads only configs/petrel/dataset_groups/intern_a1/. It still
 produces one global statistic for the whole category: Franka, Lift2, Split
-Aloha, Genie1, and AC-One samples are projected into the common OpenPI 32D
-state/action space and update the same state and actions RunningStats.
+Aloha, Genie1, and AC-One samples update the same state and actions RunningStats.
+This config uses `pi05_aloha_32`, matching the official 14D ALOHA order: left 6
+joints, left gripper, right 6 joints, and right gripper. The saved statistics are
+14D. After normalization, OpenPI pads dimensions 14 through 31 with zeros to meet
+the model's 32D contract; EE and seventh-joint controls are excluded.
 
 Run:
 

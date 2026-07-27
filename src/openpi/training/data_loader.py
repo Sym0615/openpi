@@ -2,6 +2,7 @@ from collections.abc import Iterator, Sequence
 import logging
 import multiprocessing
 import os
+import time
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -12,6 +13,7 @@ import numpy as np
 import torch
 
 import openpi.models.model as _model
+from openpi.training import profiling as _profiling
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
 from openpi.training.petrel_dataset import PetrelDataset
@@ -54,18 +56,29 @@ class DataLoader(Protocol[T_co]):
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
         self._dataset = dataset  # PetrelDataset
-        self._transform = _transforms.compose(transforms)  
+        self._transform = _transforms.compose(transforms)
 
     def __getitem__(self, index: SupportsIndex) -> T_co:
-        return self._transform(self._dataset[index])
+        started = time.perf_counter()
+        item = self._dataset[index]
+        _profiling.record("data.access_and_preload", time.perf_counter() - started)
+        started = time.perf_counter()
+        result = self._transform(item)
+        _profiling.record("data.preprocessing", time.perf_counter() - started)
+        return result
 
     def __len__(self) -> int:
         return len(self._dataset)
 
     def __getitems__(self, indices: list[int]) -> list[T_co]:
         getitems = getattr(self._dataset, "__getitems__", None)
+        started = time.perf_counter()
         items = getitems(indices) if callable(getitems) else [self._dataset[index] for index in indices]
-        return [self._transform(item) for item in items]
+        _profiling.record("data.access_and_preload", time.perf_counter() - started)
+        started = time.perf_counter()
+        result = [self._transform(item) for item in items]
+        _profiling.record("data.preprocessing", time.perf_counter() - started)
+        return result
 
     def set_epoch(self, epoch: int) -> None:
         set_epoch = getattr(self._dataset, "set_epoch", None)
@@ -457,7 +470,7 @@ class TorchDataLoader:
                 jax.sharding.PartitionSpec("B"),
             )
         self._num_batches = num_batches
-        self._dataset = dataset   #  TransformedDataset
+        self._dataset = dataset  #  TransformedDataset
         self._sampler = sampler
 
         mp_context = None
@@ -573,7 +586,7 @@ class RLDSDataLoader:
 
 class DataLoaderImpl(DataLoader):
     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
-        self._data_config = data_config  
+        self._data_config = data_config
         self._data_loader = data_loader  # TorchDataLoader
 
     def data_config(self) -> _config.DataConfig:
