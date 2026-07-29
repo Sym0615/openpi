@@ -564,7 +564,7 @@ class TrainConfig:
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
-    # Optional single-process performance profiling. Disabled for normal training.
+    # Optional per-rank performance and GPU profiling. Disabled for normal training.
     profiling_enabled: bool = False
     profiling_warmup_steps: int = 20
     profiling_log_interval: int = 10
@@ -987,7 +987,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/datahub/public/model/pi05_base_pytorch_bf16",
         pytorch_training_precision="bfloat16",
-        num_workers=0,
+        num_workers=16,
     ),
     TrainConfig(
         # This config is for fine-tuning pi05-DROID on a custom (smaller) DROID dataset.

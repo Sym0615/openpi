@@ -40,6 +40,7 @@ mixture:
     agibotworld: 3.18
     galaxea_no_mobile_torso: 0.66
     oxe: 1.89
+    abc130k: 4.0
 source_control_space:
   name: robot
   dim: 80

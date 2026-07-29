@@ -122,9 +122,11 @@ class GpuMonitor:
 
     def _run(self) -> None:
         query = "index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,temperature.gpu"
-        with self._output_path.open("w", newline="", encoding="utf-8") as output:
+        write_header = not self._output_path.exists() or self._output_path.stat().st_size == 0
+        with self._output_path.open("a", newline="", encoding="utf-8") as output:
             writer = csv.DictWriter(output, fieldnames=self._FIELDS)
-            writer.writeheader()
+            if write_header:
+                writer.writeheader()
             while not self._stop.is_set():
                 started = time.monotonic()
                 try:

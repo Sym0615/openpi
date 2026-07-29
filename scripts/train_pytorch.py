@@ -24,12 +24,16 @@ Multi-Node Training:
 """
 
 import dataclasses
+import datetime
 import gc
 import json
 import logging
 import os
+from pathlib import Path
 import platform
+import re
 import shutil
+import sys
 import time
 
 import jax
@@ -49,20 +53,36 @@ import openpi.training.config as _config
 import openpi.training.data_loader as _data
 
 
+def log_rank_phase(message: str) -> None:
+    """Emit unbuffered phase markers from every rank for distributed failure diagnosis."""
+    if os.environ.get("OPENPI_LOG_RANK_PHASES", "1") == "0":
+        return
+    print(
+        f"[rank-phase] host={platform.node()} pid={os.getpid()} rank={os.environ.get('RANK', '?')} "
+        f"local_rank={os.environ.get('LOCAL_RANK', '?')} {message}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def init_logging():
     level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
 
     class CustomFormatter(logging.Formatter):
         def format(self, record):
             record.levelname = level_mapping.get(record.levelname, record.levelname)
+            record.rank = os.environ.get("RANK", "0")
             return super().format(record)
 
     formatter = CustomFormatter(
-        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)",
+        fmt="%(asctime)s.%(msecs)03d [%(levelname)s][rank=%(rank)s] "
+        "%(message)-80s (%(process)d:%(filename)s:%(lineno)s)",
         datefmt="%H:%M:%S",
     )
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    rank = int(os.environ.get("RANK", "0"))
+    log_all_ranks = os.environ.get("OPENPI_LOG_ALL_RANKS", "0") == "1"
+    logger.setLevel(logging.INFO if rank == 0 or log_all_ranks else logging.WARNING)
     if not logger.handlers:
         ch = logging.StreamHandler()
         ch.setFormatter(formatter)
@@ -97,23 +117,40 @@ def setup_ddp():
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     use_ddp = world_size > 1
     if use_ddp and not torch.distributed.is_initialized():
+        os.environ.setdefault("TORCH_DISTRIBUTED_DEBUG", "INFO")
+        os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
         backend = "nccl" if torch.cuda.is_available() else "gloo"
-        torch.distributed.init_process_group(backend=backend, init_method="env://")
-
-        # Set up debugging environment variables for DDP issues
-        if os.environ.get("TORCH_DISTRIBUTED_DEBUG") is None:
-            os.environ["TORCH_DISTRIBUTED_DEBUG"] = "INFO"
+        timeout_s = int(os.environ.get("OPENPI_DDP_TIMEOUT_SECONDS", "1800"))
+        log_rank_phase(
+            f"init_process_group begin backend={backend} world_size={world_size} "
+            f"master={os.environ.get('MASTER_ADDR', '?')}:{os.environ.get('MASTER_PORT', '?')} timeout_s={timeout_s}"
+        )
+        torch.distributed.init_process_group(
+            backend=backend,
+            init_method="env://",
+            timeout=datetime.timedelta(seconds=timeout_s),
+        )
+        log_rank_phase("init_process_group complete")
 
     local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
+    if os.environ.get("OPENPI_DISTRIBUTED") == "1" and not torch.cuda.is_available():
+        raise RuntimeError("Distributed InternA1 training requires CUDA, but torch.cuda.is_available() is false.")
+    if torch.cuda.is_available() and local_rank >= torch.cuda.device_count():
+        raise RuntimeError(
+            f"LOCAL_RANK={local_rank} is not available; this process sees {torch.cuda.device_count()} CUDA device(s)."
+        )
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
+    log_rank_phase(
+        f"device setup complete device={device} cuda_available={torch.cuda.is_available()} "
+        f"visible_cuda_devices={torch.cuda.device_count()}"
+    )
     return use_ddp, local_rank, device
 
 
 def cleanup_ddp():
     if torch.distributed.is_initialized():
-        torch.distributed.barrier()
         torch.distributed.destroy_process_group()
 
 
@@ -122,6 +159,172 @@ def set_seed(seed: int, local_rank: int):
     np.random.seed(seed + local_rank)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed + local_rank)
+
+
+def distributed_rank() -> int:
+    return dist.get_rank() if dist.is_initialized() else 0
+
+
+def distributed_world_size() -> int:
+    return dist.get_world_size() if dist.is_initialized() else 1
+
+
+def node_rank() -> int:
+    return int(os.environ.get("GROUP_RANK", os.environ.get("NODE_RANK", "0")))
+
+
+def visible_gpu_for_local_rank(local_rank: int) -> str | int:
+    visible_devices = [value.strip() for value in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")]
+    visible_devices = [value for value in visible_devices if value]
+    if local_rank < len(visible_devices):
+        return visible_devices[local_rank]
+    return local_rank
+
+
+def synchronize_rank0_error(error: Exception | None, *, phase: str, use_ddp: bool) -> None:
+    """Broadcast a rank-0 setup failure so every rank exits instead of hanging at a barrier."""
+    if not use_ddp:
+        if error is not None:
+            raise error
+        return
+    payload = [None if error is None else f"{type(error).__name__}: {error}"]
+    dist.broadcast_object_list(payload, src=0)
+    if payload[0] is not None:
+        raise RuntimeError(f"Rank 0 failed during {phase}: {payload[0]}")
+
+
+def checkpoint_due(global_step: int, config: _config.TrainConfig) -> bool:
+    return (global_step > 0 and global_step % config.save_interval == 0) or global_step == config.num_train_steps
+
+
+def resolve_timestamped_run_config(
+    config: _config.TrainConfig, *, use_ddp: bool, rank: int
+) -> _config.TrainConfig:
+    """Resolve one shared <run_id>_<UTC time> directory before any output is created."""
+    if os.environ.get("OPENPI_TIMESTAMPED_RUN_DIR") != "1":
+        return config
+
+    run_id = os.environ.get("OPENPI_RUN_ID", "")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", run_id):
+        raise ValueError(
+            "OPENPI_RUN_ID must start with an alphanumeric character and contain only "
+            f"letters, numbers, '.', '_' or '-', got {run_id!r}"
+        )
+
+    run_base_dir = Path(config.checkpoint_base_dir).resolve() / config.name
+    payload: list[str | None] = [None]
+    resolution_error: Exception | None = None
+    if not use_ddp or rank == 0:
+        try:
+            if config.resume:
+                candidates = sorted(
+                    (
+                        path
+                        for path in run_base_dir.glob(f"{run_id}_*")
+                        if path.is_dir() and get_latest_checkpoint_step(path) is not None
+                    ),
+                    key=lambda path: path.name,
+                )
+                if not candidates:
+                    raise FileNotFoundError(
+                        f"No timestamped checkpoint directory matching {run_id}_* under {run_base_dir}"
+                    )
+                payload[0] = candidates[-1].name
+            else:
+                started_at = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S_%f")
+                payload[0] = f"{run_id}_{started_at}"
+        except Exception as exc:
+            resolution_error = exc
+
+    synchronize_rank0_error(resolution_error, phase="run directory resolution", use_ddp=use_ddp)
+    if use_ddp:
+        dist.broadcast_object_list(payload, src=0)
+    if payload[0] is None:
+        raise RuntimeError("Global rank 0 did not provide a resolved run directory name")
+
+    resolved_config = dataclasses.replace(config, exp_name=payload[0])
+    if rank == 0:
+        logging.info("Resolved run directory: %s", resolved_config.checkpoint_dir)
+    return resolved_config
+
+
+def aggregate_profile_values(
+    local_values: dict[str, float], *, local_batch_size: int, device: torch.device, use_ddp: bool
+) -> dict[str, float]:
+    """Aggregate per-rank profiling windows into global averages, maxima, and throughput."""
+    keys = (
+        "data_wait_ms",
+        "h2d_ms",
+        "forward_ms",
+        "backward_ms",
+        "optimizer_ms",
+        "step_ms",
+        "samples_per_second",
+    )
+    values = torch.tensor([float(local_values[key]) for key in keys], dtype=torch.float64, device=device)
+    sums = values.clone()
+    maxima = values.clone()
+    minima = values.clone()
+    if use_ddp:
+        dist.all_reduce(sums, op=dist.ReduceOp.SUM)
+        dist.all_reduce(maxima, op=dist.ReduceOp.MAX)
+        dist.all_reduce(minima, op=dist.ReduceOp.MIN)
+    world_size = distributed_world_size()
+    result: dict[str, float] = {}
+    for index, key in enumerate(keys[:-1]):
+        result[f"{key}_avg"] = sums[index].item() / world_size
+        result[f"{key}_max"] = maxima[index].item()
+    throughput_index = len(keys) - 1
+    result["samples_per_second_effective"] = (
+        local_batch_size * world_size / max(result["step_ms_max"] / 1000.0, 1e-9)
+    )
+    result["samples_per_second_sum_rank_rates"] = sums[throughput_index].item()
+    result["samples_per_second_avg_per_rank"] = sums[throughput_index].item() / world_size
+    result["samples_per_second_min_per_rank"] = minima[throughput_index].item()
+    result["samples_per_second_max_per_rank"] = maxima[throughput_index].item()
+    return result
+
+
+def aggregate_gpu_values(
+    local_values: dict[str, float], *, device: torch.device, use_ddp: bool
+) -> dict[str, float]:
+    """Aggregate one GPU monitor summary from every rank."""
+    keys = (
+        "gpu_util_avg",
+        "gpu_util_max",
+        "memory_util_avg",
+        "memory_used_mib_max",
+        "power_w_avg",
+        "temperature_c_max",
+    )
+    valid = 1.0 if local_values else 0.0
+    values = torch.tensor(
+        [float(local_values.get(key, 0.0)) for key in keys] + [valid],
+        dtype=torch.float64,
+        device=device,
+    )
+    sums = values.clone()
+    maxima = values.clone()
+    util_min = torch.tensor(
+        float(local_values.get("gpu_util_avg", float("inf"))), dtype=torch.float64, device=device
+    )
+    if use_ddp:
+        dist.all_reduce(sums, op=dist.ReduceOp.SUM)
+        dist.all_reduce(maxima, op=dist.ReduceOp.MAX)
+        dist.all_reduce(util_min, op=dist.ReduceOp.MIN)
+    valid_count = int(sums[-1].item())
+    if valid_count == 0:
+        return {}
+    return {
+        "gpu_count": float(valid_count),
+        "gpu_util_avg": sums[0].item() / valid_count,
+        "gpu_util_avg_min": util_min.item(),
+        "gpu_util_max": maxima[1].item(),
+        "memory_util_avg": sums[2].item() / valid_count,
+        "memory_used_mib_max": maxima[3].item(),
+        "power_w_avg": sums[4].item() / valid_count,
+        "temperature_c_max": maxima[5].item(),
+    }
 
 
 def build_datasets(config: _config.TrainConfig):
@@ -150,50 +353,48 @@ def get_model_parameters(model):
 
 def save_checkpoint(model, optimizer, global_step, config, is_main, data_config):
     """Save a checkpoint with model state, optimizer state, and metadata."""
-    if not is_main:
+    if not is_main or not checkpoint_due(global_step, config):
         return
 
-    # Only save if it's time to save or if it's the final step
-    if (global_step % config.save_interval == 0 and global_step > 0) or global_step == config.num_train_steps - 1:
-        # Create temporary directory for atomic checkpoint saving
-        final_ckpt_dir = config.checkpoint_dir / f"{global_step}"
-        tmp_ckpt_dir = config.checkpoint_dir / f"tmp_{global_step}"
+    # Create temporary directory for atomic checkpoint saving
+    final_ckpt_dir = config.checkpoint_dir / f"{global_step}"
+    tmp_ckpt_dir = config.checkpoint_dir / f"tmp_{global_step}"
 
-        # Remove any existing temp directory and create new one
-        if tmp_ckpt_dir.exists():
-            shutil.rmtree(tmp_ckpt_dir)
-        tmp_ckpt_dir.mkdir(parents=True, exist_ok=True)
+    # Remove any existing temp directory and create new one
+    if tmp_ckpt_dir.exists():
+        shutil.rmtree(tmp_ckpt_dir)
+    tmp_ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save model state using safetensors (handle shared tensors)
-        model_to_save = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
-        safetensors.torch.save_model(model_to_save, tmp_ckpt_dir / "model.safetensors")
+    # Save model state using safetensors (handle shared tensors)
+    model_to_save = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+    safetensors.torch.save_model(model_to_save, tmp_ckpt_dir / "model.safetensors")
 
-        # Save optimizer state using PyTorch format
-        torch.save(optimizer.state_dict(), tmp_ckpt_dir / "optimizer.pt")
+    # Save optimizer state using PyTorch format
+    torch.save(optimizer.state_dict(), tmp_ckpt_dir / "optimizer.pt")
 
-        # Save training metadata (avoid saving full config to prevent JAX/Flax compatibility issues)
-        metadata = {
-            "global_step": global_step,
-            "config": dataclasses.asdict(config),
-            "timestamp": time.time(),
-        }
-        torch.save(metadata, tmp_ckpt_dir / "metadata.pt")
+    # Save training metadata (avoid saving full config to prevent JAX/Flax compatibility issues)
+    metadata = {
+        "global_step": global_step,
+        "config": dataclasses.asdict(config),
+        "timestamp": time.time(),
+    }
+    torch.save(metadata, tmp_ckpt_dir / "metadata.pt")
 
-        # save norm stats
-        norm_stats = data_config.norm_stats
-        if norm_stats is not None and data_config.asset_id is not None:
-            _normalize.save(tmp_ckpt_dir / "assets" / data_config.asset_id, norm_stats)
+    # save norm stats
+    norm_stats = data_config.norm_stats
+    if norm_stats is not None and data_config.asset_id is not None:
+        _normalize.save(tmp_ckpt_dir / "assets" / data_config.asset_id, norm_stats)
 
-        # Atomically move temp directory to final location
-        if final_ckpt_dir.exists():
-            shutil.rmtree(final_ckpt_dir)
-        tmp_ckpt_dir.rename(final_ckpt_dir)
+    # Atomically move temp directory to final location
+    if final_ckpt_dir.exists():
+        shutil.rmtree(final_ckpt_dir)
+    tmp_ckpt_dir.rename(final_ckpt_dir)
 
-        logging.info(f"Saved checkpoint at step {global_step} -> {final_ckpt_dir}")
+    logging.info(f"Saved checkpoint at step {global_step} -> {final_ckpt_dir}")
 
-        # Log checkpoint to wandb
-        if config.wandb_enabled:
-            wandb.log({"checkpoint_step": global_step}, step=global_step)
+    # Log checkpoint to wandb
+    if config.wandb_enabled:
+        wandb.log({"checkpoint_step": global_step}, step=global_step)
 
 
 def load_checkpoint(model, optimizer, checkpoint_dir, device):
@@ -332,57 +533,95 @@ def end_cuda_phase(
     return (time.perf_counter() - cpu_started) * 1000.0
 
 
-def train_loop(config: _config.TrainConfig):
+def _train_loop(config: _config.TrainConfig):
     use_ddp, local_rank, device = setup_ddp()
-    is_main = (not use_ddp) or (dist.get_rank() == 0)
+    rank = distributed_rank()
+    world_size = distributed_world_size()
+    is_main = rank == 0
     set_seed(config.seed, local_rank)
     _profiling.set_enabled(enabled=config.profiling_enabled)
+    log_rank_phase(f"train loop initialized global_rank={rank} world_size={world_size}")
+
+    if config.batch_size < world_size or config.batch_size % world_size != 0:
+        raise ValueError(
+            f"Global batch size ({config.batch_size}) must be positive and divisible by world size ({world_size})."
+        )
+
+    config = resolve_timestamped_run_config(config, use_ddp=use_ddp, rank=rank)
+    log_rank_phase(f"run directory resolved directory={config.checkpoint_dir}")
 
     # Initialize checkpoint directory and wandb
     resuming = False
-    if config.resume:
-        # Find checkpoint directory based on experiment name
-        exp_checkpoint_dir = config.checkpoint_dir
-        if exp_checkpoint_dir.exists():
-            # Use validation to find the latest working checkpoint
-            latest_step = get_latest_checkpoint_step(exp_checkpoint_dir)
-            if latest_step is not None:
-                resuming = True
-                logging.info(
-                    f"Resuming from experiment checkpoint directory: {exp_checkpoint_dir} at step {latest_step}"
+    checkpoint_setup_error: Exception | None = None
+    if is_main:
+        try:
+            if config.resume:
+                # Find checkpoint directory based on experiment name
+                exp_checkpoint_dir = config.checkpoint_dir
+                if exp_checkpoint_dir.exists():
+                    # Use validation to find the latest working checkpoint
+                    latest_step = get_latest_checkpoint_step(exp_checkpoint_dir)
+                    if latest_step is not None:
+                        resuming = True
+                        logging.info(
+                            f"Resuming from experiment checkpoint directory: {exp_checkpoint_dir} "
+                            f"at step {latest_step}"
+                        )
+                    else:
+                        raise FileNotFoundError(f"No valid checkpoints found in {exp_checkpoint_dir} for resume")
+                else:
+                    raise FileNotFoundError(
+                        f"Experiment checkpoint directory {exp_checkpoint_dir} does not exist for resume"
+                    )
+            elif config.overwrite and config.checkpoint_dir.exists():
+                shutil.rmtree(config.checkpoint_dir)
+                logging.info(f"Overwriting checkpoint directory: {config.checkpoint_dir}")
+            elif config.checkpoint_dir.exists():
+                raise FileExistsError(
+                    f"Checkpoint directory {config.checkpoint_dir} already exists. "
+                    "Set OPENPI_RESUME=1 to resume or OPENPI_OVERWRITE=1 to replace it."
                 )
-            else:
-                raise FileNotFoundError(f"No valid checkpoints found in {exp_checkpoint_dir} for resume")
-        else:
-            raise FileNotFoundError(f"Experiment checkpoint directory {exp_checkpoint_dir} does not exist for resume")
-    elif config.overwrite and config.checkpoint_dir.exists():
-        shutil.rmtree(config.checkpoint_dir)
-        logging.info(f"Overwriting checkpoint directory: {config.checkpoint_dir}")
 
-    # Create checkpoint directory with experiment name
-    if not resuming:
-        # For new runs, create experiment-specific checkpoint directory
-        exp_checkpoint_dir = config.checkpoint_dir
-        exp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        logging.info(f"Created experiment checkpoint directory: {exp_checkpoint_dir}")
-    else:
-        # For resume, checkpoint_dir is already set to the experiment directory
-        logging.info(f"Using existing experiment checkpoint directory: {config.checkpoint_dir}")
+            if not resuming:
+                config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                logging.info(f"Created experiment checkpoint directory: {config.checkpoint_dir}")
+            else:
+                logging.info(f"Using existing experiment checkpoint directory: {config.checkpoint_dir}")
+        except Exception as exc:  # Propagate the same setup failure to every rank.
+            checkpoint_setup_error = exc
+    synchronize_rank0_error(checkpoint_setup_error, phase="checkpoint setup", use_ddp=use_ddp)
+    resuming = config.resume
+    log_rank_phase(f"checkpoint setup complete resume={resuming} directory={config.checkpoint_dir}")
 
     profile_dir = config.checkpoint_dir / "profiling"
     profile_metrics_path = profile_dir / "step_metrics.jsonl"
-    data_metrics_path = profile_dir / "data_metrics.jsonl"
+    rank_profile_dir = profile_dir / "ranks" / f"node_{node_rank():03d}_rank_{rank:05d}"
+    rank_step_metrics_path = rank_profile_dir / "step_metrics.jsonl"
+    rank_data_metrics_path = rank_profile_dir / "data_metrics.jsonl"
     gpu_monitor = None
-    if config.profiling_enabled and is_main:
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
-        gpu_index = visible_devices[0].strip() if visible_devices and visible_devices[0].strip() else 0
-        gpu_monitor = _profiling.GpuMonitor(profile_dir / "gpu_metrics.csv", gpu_index, config.gpu_monitor_interval_s)
+    if config.profiling_enabled:
+        if is_main:
+            profile_dir.mkdir(parents=True, exist_ok=True)
+        if use_ddp:
+            dist.barrier()
+        rank_profile_dir.mkdir(parents=True, exist_ok=True)
+        gpu_index = visible_gpu_for_local_rank(local_rank)
+        gpu_monitor = _profiling.GpuMonitor(
+            rank_profile_dir / f"gpu_local_{local_rank}_metrics.csv",
+            gpu_index,
+            config.gpu_monitor_interval_s,
+        )
         gpu_monitor.start()
-        logging.info("Profiling enabled; outputs will be written to %s", profile_dir)
+        logging.info(
+            "Profiling enabled for rank=%d local_rank=%d gpu=%s; outputs: %s",
+            rank,
+            local_rank,
+            gpu_index,
+            rank_profile_dir,
+        )
         if config.num_workers > 0:
             logging.warning(
-                "Detailed access/preprocessing counters are process-local. For exact stage attribution use "
+                "Detailed access/preprocessing counters are worker-local. For exact stage attribution use "
                 "num_workers=0; use num_workers>0 runs to measure end-to-end DataLoader throughput."
             )
 
@@ -393,14 +632,15 @@ def train_loop(config: _config.TrainConfig):
     # Build data loader using the unified data loader
     # Calculate effective batch size per GPU for DDP
     # For N GPUs, each GPU should get batch_size/N samples, so total across all GPUs is batch_size
-    world_size = torch.distributed.get_world_size() if use_ddp else 1
     effective_batch_size = config.batch_size // world_size
     logging.info(
         f"Using batch size per GPU: {effective_batch_size} (total batch size across {world_size} GPUs: {config.batch_size})"
     )
 
     # Pass the original batch size to data loader - it will handle DDP splitting internally
+    log_rank_phase("building distributed dataset and DataLoader")
     loader, data_config = build_datasets(config)
+    log_rank_phase("distributed dataset and DataLoader ready")
 
     # Log sample images to wandb on first batch
     if is_main and config.wandb_enabled and not resuming:
@@ -450,7 +690,9 @@ def train_loop(config: _config.TrainConfig):
         # Update dtype to match pytorch_training_precision
         object.__setattr__(model_cfg, "dtype", config.pytorch_training_precision)
 
+    log_rank_phase("constructing model and moving it to the selected device")
     model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
+    log_rank_phase("model construction complete")
 
     if hasattr(model, "gradient_checkpointing_enable"):
         enable_gradient_checkpointing = True
@@ -473,24 +715,30 @@ def train_loop(config: _config.TrainConfig):
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128,expandable_segments:True"
         logging.info("Enabled memory optimizations for 8+ GPU training")
 
+    # Load weights from weight_loader if specified (for fine-tuning)
+    # In DDP, rank 0 loads once before wrapping and DDP broadcasts its parameters.
+    weight_load_error: Exception | None = None
+    log_rank_phase("base weight loading/synchronization begin")
+    if config.pytorch_weight_path is not None and (not use_ddp or is_main):
+        try:
+            logging.info(f"Loading weights from: {config.pytorch_weight_path}")
+            model_path = os.path.join(config.pytorch_weight_path, "model.safetensors")
+            safetensors.torch.load_model(model, model_path)
+            logging.info(f"Loaded PyTorch weights from {config.pytorch_weight_path}")
+        except Exception as exc:  # Propagate the same load failure to every rank.
+            weight_load_error = exc
+    synchronize_rank0_error(weight_load_error, phase="base weight loading", use_ddp=use_ddp)
+    log_rank_phase("base weight loading/synchronization complete")
     if use_ddp:
+        log_rank_phase("DistributedDataParallel wrapping begin")
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[device.index] if device.type == "cuda" else None,
-            find_unused_parameters=True,  # Disable for memory efficiency
-            gradient_as_bucket_view=True,  # Enable for memory efficiency
-            static_graph=world_size >= 8,  # Enable for 8+ GPUs
+            find_unused_parameters=True,
+            gradient_as_bucket_view=True,
+            static_graph=world_size >= 8,
         )
-
-    # Load weights from weight_loader if specified (for fine-tuning)
-    if config.pytorch_weight_path is not None:
-        logging.info(f"Loading weights from: {config.pytorch_weight_path}")
-
-        model_path = os.path.join(config.pytorch_weight_path, "model.safetensors")
-        safetensors.torch.load_model(
-            (model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model), model_path
-        )
-        logging.info(f"Loaded PyTorch weights from {config.pytorch_weight_path}")
+        log_rank_phase("DistributedDataParallel wrapping complete")
 
     # Optimizer + learning rate schedule from config
     warmup_steps = config.lr_schedule.warmup_steps
@@ -506,12 +754,15 @@ def train_loop(config: _config.TrainConfig):
         eps=config.optimizer.eps,
         weight_decay=config.optimizer.weight_decay,
     )
+    log_rank_phase("optimizer construction complete")
 
     # Load checkpoint if resuming
     global_step = 0
     if resuming:
+        log_rank_phase("checkpoint resume loading begin")
         global_step = load_checkpoint(model, optim, config.checkpoint_dir, device)
         logging.info(f"Resumed training from step {global_step}")
+        log_rank_phase(f"checkpoint resume loading complete global_step={global_step}")
 
     def lr_schedule(step: int):
         if step < warmup_steps:
@@ -544,8 +795,8 @@ def train_loop(config: _config.TrainConfig):
         logging.info(f"Training precision: {model_cfg.dtype}")
 
     torch_profiler = None
-    if config.profiling_enabled and config.profiling_torch_trace and is_main:
-        trace_dir = profile_dir / "torch_trace"
+    if config.profiling_enabled and config.profiling_torch_trace:
+        trace_dir = rank_profile_dir / "torch_trace"
         profiler_activities = [torch.profiler.ProfilerActivity.CPU]
         if device.type == "cuda":
             profiler_activities.append(torch.profiler.ProfilerActivity.CUDA)
@@ -563,7 +814,7 @@ def train_loop(config: _config.TrainConfig):
             with_stack=False,
         )
         torch_profiler.start()
-        logging.info("PyTorch trace enabled; trace directory: %s", trace_dir)
+        logging.info("PyTorch trace enabled for rank=%d; trace directory: %s", rank, trace_dir)
 
     # Training loop - iterate until we reach num_train_steps
     pbar = (
@@ -573,6 +824,7 @@ def train_loop(config: _config.TrainConfig):
     )
 
     data_iter = iter(loader)
+    log_rank_phase(f"training iteration ready initial_global_step={global_step}")
     logging_interval = config.profiling_log_interval if config.profiling_enabled else config.log_interval
     while global_step < config.num_train_steps:
         step_started = time.perf_counter()
@@ -637,7 +889,7 @@ def train_loop(config: _config.TrainConfig):
             profile_values["step_ms"] = (time.perf_counter() - step_started) * 1000.0
             profile_values["samples_per_second"] = effective_batch_size / max(profile_values["step_ms"] / 1000.0, 1e-9)
 
-        if is_main:
+        if is_main or config.profiling_enabled:
             infos.append(
                 {
                     "loss": loss.item(),
@@ -651,21 +903,22 @@ def train_loop(config: _config.TrainConfig):
             _profiling.snapshot(reset=True)
             if gpu_monitor is not None:
                 gpu_monitor.summary(reset=True)
-            if is_main:
-                infos = []
-                start_time = time.time()
+            infos = []
+            start_time = time.time()
 
-        if is_main and infos and (global_step % logging_interval == 0):
+        if infos and (global_step % logging_interval == 0):
             elapsed = time.time() - start_time
             avg_loss = sum(info["loss"] for info in infos) / len(infos)
             avg_lr = sum(info["learning_rate"] for info in infos) / len(infos)
             grad_norms = [info["grad_norm"] for info in infos if info.get("grad_norm") is not None]
             avg_grad_norm = sum(grad_norms) / len(grad_norms) if grad_norms else None
-            logging.info(
-                f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} grad_norm={avg_grad_norm:.2f} time={elapsed:.1f}s"
-                if avg_grad_norm is not None
-                else f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} time={elapsed:.1f}s"
-            )
+            if is_main:
+                logging.info(
+                    f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} "
+                    f"grad_norm={avg_grad_norm:.2f} time={elapsed:.1f}s"
+                    if avg_grad_norm is not None
+                    else f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} time={elapsed:.1f}s"
+                )
 
             if config.profiling_enabled and global_step >= config.profiling_warmup_steps:
                 profile_keys = (
@@ -677,29 +930,67 @@ def train_loop(config: _config.TrainConfig):
                     "step_ms",
                     "samples_per_second",
                 )
-                averages = {key: sum(float(info.get(key, 0.0)) for info in infos) / len(infos) for key in profile_keys}
-                gpu_values = gpu_monitor.summary(reset=True) if gpu_monitor is not None else {}
-                profile_payload = {"step": global_step, **averages, **gpu_values}
-                logging.info(
-                    "profile step=%d samples/s=%.2f data_wait=%.1fms h2d=%.1fms forward=%.1fms "
-                    "backward=%.1fms optimizer=%.1fms step=%.1fms gpu_util=%.1f%%",
-                    global_step,
-                    averages["samples_per_second"],
-                    averages["data_wait_ms"],
-                    averages["h2d_ms"],
-                    averages["forward_ms"],
-                    averages["backward_ms"],
-                    averages["optimizer_ms"],
-                    averages["step_ms"],
-                    gpu_values.get("gpu_util_avg", float("nan")),
-                )
-                with profile_metrics_path.open("a", encoding="utf-8") as output:
-                    output.write(json.dumps(profile_payload, ensure_ascii=False) + "\n")
-                data_payload = {"step": global_step, "events": _profiling.snapshot(reset=True)}
-                with data_metrics_path.open("a", encoding="utf-8") as output:
+                local_averages = {
+                    key: sum(float(info.get(key, 0.0)) for info in infos) / len(infos) for key in profile_keys
+                }
+                local_gpu_values = gpu_monitor.summary(reset=True) if gpu_monitor is not None else {}
+                local_profile_payload = {
+                    "step": global_step,
+                    "rank": rank,
+                    "local_rank": local_rank,
+                    "node_rank": node_rank(),
+                    **local_averages,
+                    **local_gpu_values,
+                }
+                with rank_step_metrics_path.open("a", encoding="utf-8") as output:
+                    output.write(json.dumps(local_profile_payload, ensure_ascii=False) + "\n")
+                data_payload = {
+                    "step": global_step,
+                    "rank": rank,
+                    "events": _profiling.snapshot(reset=True),
+                }
+                with rank_data_metrics_path.open("a", encoding="utf-8") as output:
                     output.write(json.dumps(data_payload, ensure_ascii=False) + "\n")
 
-            if config.wandb_enabled:
+                global_profile_values = aggregate_profile_values(
+                    local_averages,
+                    local_batch_size=effective_batch_size,
+                    device=device,
+                    use_ddp=use_ddp,
+                )
+                global_gpu_values = aggregate_gpu_values(
+                    local_gpu_values,
+                    device=device,
+                    use_ddp=use_ddp,
+                )
+                if is_main:
+                    profile_payload = {
+                        "step": global_step,
+                        "world_size": world_size,
+                        **global_profile_values,
+                        **global_gpu_values,
+                    }
+                    logging.info(
+                        "profile step=%d global_samples/s=%.2f slowest_step=%.1fms "
+                        "data_wait(avg/max)=%.1f/%.1fms forward(avg/max)=%.1f/%.1fms "
+                        "backward(avg/max)=%.1f/%.1fms gpu_util(avg/min/max)=%.1f/%.1f/%.1f%%",
+                        global_step,
+                        global_profile_values["samples_per_second_effective"],
+                        global_profile_values["step_ms_max"],
+                        global_profile_values["data_wait_ms_avg"],
+                        global_profile_values["data_wait_ms_max"],
+                        global_profile_values["forward_ms_avg"],
+                        global_profile_values["forward_ms_max"],
+                        global_profile_values["backward_ms_avg"],
+                        global_profile_values["backward_ms_max"],
+                        global_gpu_values.get("gpu_util_avg", float("nan")),
+                        global_gpu_values.get("gpu_util_avg_min", float("nan")),
+                        global_gpu_values.get("gpu_util_max", float("nan")),
+                    )
+                    with profile_metrics_path.open("a", encoding="utf-8") as output:
+                        output.write(json.dumps(profile_payload, ensure_ascii=False) + "\n")
+
+            if is_main and config.wandb_enabled:
                 log_payload = {
                     "loss": avg_loss,
                     "learning_rate": avg_lr,
@@ -717,6 +1008,8 @@ def train_loop(config: _config.TrainConfig):
         if torch_profiler is not None:
             torch_profiler.step()
         save_checkpoint(model, optim, global_step, config, is_main, data_config)
+        if use_ddp and checkpoint_due(global_step, config):
+            dist.barrier()
 
         if pbar is not None:
             pbar.update(1)
@@ -737,7 +1030,14 @@ def train_loop(config: _config.TrainConfig):
     if is_main and config.wandb_enabled:
         wandb.finish()
 
-    cleanup_ddp()
+
+
+def train_loop(config: _config.TrainConfig):
+    """Run training and always release an initialized distributed process group."""
+    try:
+        _train_loop(config)
+    finally:
+        cleanup_ddp()
 
 
 def main():
