@@ -9,12 +9,14 @@ from collections.abc import Mapping, Sequence
 import dataclasses
 import logging
 from pathlib import Path
+import time
 from typing import Any, Literal
 
 import numpy as np
 import torch
 
 from openpi.training import petrel_lerobot_reader as reader
+from openpi.training import profiling as _profiling
 
 _OPENPI_CAMERA_NAMES = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
 _COMPACT_VALID_PROJECTION = "compact_valid"
@@ -137,6 +139,8 @@ class PetrelDatasetConfig:
     load_images: bool = True
     skip_bad_videos: bool = True
     max_decode_retries: int = 8
+    # Local files are passed directly to PyAV so it can seek instead of reading and copying the whole MP4.
+    local_video_path_decode: bool = True
 
     def __post_init__(self) -> None:
         if not self.dataset_config:
@@ -179,6 +183,7 @@ class PetrelDataset(torch.utils.data.Dataset):
         self._length: int | None = None
         self._epoch = 0
         self.prefer_sequential_indices = False
+        self.training_block_size = 1
         self.requires_worker_restart_each_epoch = True
         self._initialize_backend()
 
@@ -209,6 +214,7 @@ class PetrelDataset(torch.utils.data.Dataset):
                 global_sample_stride=int(sampling_cfg["global_sample_stride"]),
                 parquet_cache_size=parquet_cache_size,
                 use_path_index_cache=True,
+                local_video_path_decode=self.config.local_video_path_decode,
             )
             for spec in specs
         ]
@@ -244,6 +250,7 @@ class PetrelDataset(torch.utils.data.Dataset):
         self._mixed_dataset = mixed_dataset
         self._length = len(mixed_dataset)
         self.prefer_sequential_indices = bool(getattr(mixed_dataset, "prefer_sequential_indices", False))
+        self.training_block_size = int(getattr(mixed_dataset, "training_block_size", 1))
         self._validate_feature_dimensions()
 
     def _validate_openpi_contract(self, raw_config: Mapping[str, Any]) -> None:
@@ -428,13 +435,45 @@ class PetrelDataset(torch.utils.data.Dataset):
     def __getitems__(self, indices: list[int]) -> list[dict[str, Any]]:
         if not indices:
             return []
+        batch_started = time.perf_counter()
         loader, datasets, mixed_dataset = self._ensure_backend()
-        items = [mixed_dataset[int(index)] for index in indices]
+        phase_started = time.perf_counter()
+        item_groups: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
+        for position, index in enumerate(indices):
+            dataset_index, episode_index, frame_index = mixed_dataset.sample_step(int(index))
+            item_groups[(dataset_index, episode_index)].append((position, frame_index))
+        _profiling.record("petrel.batch.group_indices", time.perf_counter() - phase_started)
+
+        phase_started = time.perf_counter()
+        items: list[dict[str, Any] | None] = [None] * len(indices)
+        for (dataset_index, episode_index), position_frames in item_groups.items():
+            dataset = datasets[dataset_index]
+            episode_items = dataset.get_step_items(
+                episode_index,
+                [frame_index for _, frame_index in position_frames],
+            )
+            if len(episode_items) != len(position_frames):
+                raise RuntimeError(
+                    f"Dataset {dataset.name!r} returned {len(episode_items)} items for "
+                    f"{len(position_frames)} requested frames in episode {episode_index}."
+                )
+            for (position, _), item in zip(position_frames, episode_items, strict=True):
+                item["dataset_index"] = torch.tensor(dataset_index, dtype=torch.long)
+                items[position] = item
+        _profiling.record("petrel.batch.parquet_and_samples", time.perf_counter() - phase_started)
+
+        if any(item is None for item in items):
+            raise RuntimeError("Batched Petrel loading did not populate every requested position.")
+        loaded_items = [item for item in items if item is not None]
         if not self.config.load_images:
-            return [self._pack_item(item, {}) for item in items]
-        images_by_position: list[dict[str, np.ndarray]] = [{} for _ in items]
+            phase_started = time.perf_counter()
+            packed_items = [self._pack_item(item, {}) for item in loaded_items]
+            _profiling.record("petrel.batch.pack", time.perf_counter() - phase_started)
+            _profiling.record("petrel.batch.total", time.perf_counter() - batch_started)
+            return packed_items
+        images_by_position: list[dict[str, np.ndarray]] = [{} for _ in loaded_items]
         groups: dict[tuple[int, int], list[int]] = defaultdict(list)
-        for position, item in enumerate(items):
+        for position, item in enumerate(loaded_items):
             dataset_index, _ = self._dataset_for_item(item, datasets)
             episode_index = int(torch.as_tensor(item["episode_index"]).item())
             groups[(dataset_index, episode_index)].append(position)
@@ -445,7 +484,7 @@ class PetrelDataset(torch.utils.data.Dataset):
                 for source_key, target_key in self._camera_assignments(dataset):
                     timestamps: list[float] = []
                     for position in positions:
-                        item = items[position]
+                        item = loaded_items[position]
                         if "timestamp" in item:
                             timestamp = float(torch.as_tensor(item["timestamp"])[0].item())
                         else:
@@ -455,13 +494,27 @@ class PetrelDataset(torch.utils.data.Dataset):
                         timestamps.append(timestamp)
 
                     unique_timestamps = sorted(set(timestamps))
-                    raw_video = dataset._load_episode_video_bytes(episode_index, source_key)
-                    decoded = loader.decode_mp4_bytes(raw_video, unique_timestamps)
+                    decode_episode_video = getattr(dataset, "decode_episode_video", None)
+                    if callable(decode_episode_video):
+                        decoded = decode_episode_video(episode_index, source_key, unique_timestamps)
+                    else:
+                        # Compatibility for lightweight test doubles and older reader implementations.
+                        raw_video = dataset._load_episode_video_bytes(episode_index, source_key)
+                        decoded = loader.decode_mp4_bytes(raw_video, unique_timestamps)
                     timestamp_positions = {timestamp: pos for pos, timestamp in enumerate(unique_timestamps)}
+                    phase_started = time.perf_counter()
                     for position, timestamp in zip(positions, timestamps, strict=True):
                         frame = decoded[timestamp_positions[timestamp]]
                         images_by_position[position][target_key] = self._frame_to_openpi_image(frame)
-            return [self._pack_item(item, images) for item, images in zip(items, images_by_position, strict=True)]
+                    _profiling.record("petrel.batch.frame_conversion", time.perf_counter() - phase_started)
+            phase_started = time.perf_counter()
+            packed_items = [
+                self._pack_item(item, images)
+                for item, images in zip(loaded_items, images_by_position, strict=True)
+            ]
+            _profiling.record("petrel.batch.pack", time.perf_counter() - phase_started)
+            _profiling.record("petrel.batch.total", time.perf_counter() - batch_started)
+            return packed_items
         except Exception as exc:
             if not self.config.skip_bad_videos:
                 raise

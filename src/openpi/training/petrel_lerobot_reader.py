@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+from collections import OrderedDict
 import configparser
 import hashlib
 import json
@@ -110,6 +111,19 @@ def _profile_record(name: str, elapsed_s: float, **info: Any) -> None:
     _training_profiling.record(name, elapsed_s, num_bytes=info.get("bytes"))
     if _PROFILE_ENABLED:
         _PROFILE_EVENTS.append((name, float(elapsed_s), info))
+
+
+def _io_profile_name(backend: str, path: str | Path) -> str:
+    suffix = str(path).lower().split("?", 1)[0]
+    if suffix.endswith(".parquet"):
+        kind = "parquet"
+    elif suffix.endswith(".mp4"):
+        kind = "video"
+    elif "/meta/" in suffix or suffix.startswith("meta/"):
+        kind = "metadata"
+    else:
+        kind = "other"
+    return f"io.{backend}.{kind}_read"
 
 
 def _profile_print() -> None:
@@ -244,7 +258,7 @@ class PetrelClient:
         except Exception as exc:
             raise FileNotFoundError(f"[PetrelClient:boto3] failed to read {url}: {exc}") from exc
         _profile_record(
-            "petrel.boto3_get_bytes",
+            _io_profile_name("boto3", url),
             time.perf_counter() - t0,
             bytes=len(data),
             path=str(url).rsplit("/", 1)[-1],
@@ -258,7 +272,10 @@ class PetrelClient:
         data = self._client.get(url)
         elapsed = time.perf_counter() - t0
         _profile_record(
-            "petrel.get_bytes", elapsed, bytes=len(data) if data is not None else None, path=str(url).rsplit("/", 1)[-1]
+            _io_profile_name("petrel", url),
+            elapsed,
+            bytes=len(data) if data is not None else None,
+            path=str(url).rsplit("/", 1)[-1],
         )
         if data is None:
             raise FileNotFoundError(f"[PetrelClient] file not found: {url}")
@@ -271,20 +288,25 @@ class LocalFileClient:
     def __init__(self, root: str | Path):
         self.root = Path(root).expanduser().resolve()
 
-    def get_bytes(self, path: str) -> bytes:
+    def resolve_path(self, path: str) -> Path:
+        """Resolve a dataset path without allowing it to escape the configured root."""
         local_path = Path(path).expanduser()
         if not local_path.is_absolute():
             raise ValueError(f"Local dataset path must be absolute, got {path!r}.")
         resolved = local_path.resolve()
         if not resolved.is_relative_to(self.root):
             raise ValueError(f"Local dataset path escapes configured root {self.root}: {resolved}")
+        return resolved
+
+    def get_bytes(self, path: str) -> bytes:
+        resolved = self.resolve_path(path)
         try:
             t0 = time.perf_counter()
             data = resolved.read_bytes()
         except OSError as exc:
             raise FileNotFoundError(f"[LocalFileClient] failed to read {resolved}: {exc}") from exc
         _profile_record(
-            "local.get_bytes",
+            _io_profile_name("local", resolved),
             time.perf_counter() - t0,
             bytes=len(data),
             path=resolved.name,
@@ -983,8 +1005,8 @@ def _adapter_columns(adapter: dict[str, Any] | None) -> list[str]:
     return columns
 
 
-def _decode_mp4_bytes_lerobot(
-    raw: bytes,
+def _decode_mp4_path_lerobot(
+    path: str | Path,
     timestamps: list[float],
     *,
     tolerance_s: float = 0.02,
@@ -994,72 +1016,83 @@ def _decode_mp4_bytes_lerobot(
         return torch.empty(0, 3, 0, 0)
 
     del backend
+    t0 = time.perf_counter()
+    import av
+
+    _profile_record("video.import_av", time.perf_counter() - t0)
+    t0 = time.perf_counter()
+    container = av.open(str(path), mode="r")
+    try:
+        stream = container.streams.video[0]
+        try:
+            stream.thread_type = "NONE"
+        except Exception:
+            pass
+        try:
+            stream.codec_context.thread_count = 1
+        except Exception:
+            pass
+        first_ts = float(min(timestamps))
+        last_ts = float(max(timestamps))
+        if stream.time_base is not None:
+            seek_offset = int(first_ts / float(stream.time_base))
+            container.seek(seek_offset, any_frame=False, backward=True, stream=stream)
+
+        loaded_frames = []
+        loaded_ts = []
+        fallback_fps = float(stream.average_rate) if stream.average_rate is not None else 30.0
+        for frame_idx, frame in enumerate(container.decode(stream)):
+            if frame.pts is not None and stream.time_base is not None:
+                ts = float(frame.pts * stream.time_base)
+            elif frame.time is not None:
+                ts = float(frame.time)
+            else:
+                ts = frame_idx / fallback_fps
+            if ts + tolerance_s < first_ts:
+                continue
+            loaded_frames.append(frame.to_ndarray(format="rgb24"))
+            loaded_ts.append(ts)
+            if ts >= last_ts + tolerance_s:
+                break
+    finally:
+        container.close()
+
+    if not loaded_frames:
+        raise RuntimeError(f"PyAV decoded no frames from mp4: {path}")
+    loaded_ts_arr = np.asarray(loaded_ts, dtype=np.float32)
+    query_ts = np.asarray(timestamps, dtype=np.float32)
+    closest = np.abs(query_ts[:, None] - loaded_ts_arr[None]).argmin(axis=1)
+    max_err = float(np.abs(query_ts - loaded_ts_arr[closest]).max())
+    if max_err > max(tolerance_s, 1.0 / 30.0 + tolerance_s):
+        _profile_record("video.timestamp_warning", 0.0, max_err=max_err)
+    arr = np.stack([loaded_frames[int(i)] for i in closest], axis=0)
+    frames = torch.from_numpy(arr).permute(0, 3, 1, 2).to(torch.float32) / 255.0
+    _profile_record(
+        "video.decode",
+        time.perf_counter() - t0,
+        frames=len(timestamps),
+        loaded=len(loaded_frames),
+        backend="pyav_path",
+    )
+    del loaded_frames, loaded_ts, loaded_ts_arr, query_ts, closest
+    return frames
+
+
+def _decode_mp4_bytes_lerobot(
+    raw: bytes,
+    timestamps: list[float],
+    *,
+    tolerance_s: float = 0.02,
+    backend: str | None = None,
+) -> torch.Tensor:
+    if not timestamps:
+        return torch.empty(0, 3, 0, 0)
     with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
         t0 = time.perf_counter()
         f.write(raw)
         f.flush()
         _profile_record("video.tempfile_write", time.perf_counter() - t0, bytes=len(raw))
-
-        t0 = time.perf_counter()
-        import av
-
-        _profile_record("video.import_av", time.perf_counter() - t0)
-        t0 = time.perf_counter()
-        container = av.open(f.name, mode="r")
-        try:
-            stream = container.streams.video[0]
-            try:
-                stream.thread_type = "NONE"
-            except Exception:
-                pass
-            try:
-                stream.codec_context.thread_count = 1
-            except Exception:
-                pass
-            first_ts = float(min(timestamps))
-            last_ts = float(max(timestamps))
-            if stream.time_base is not None:
-                seek_offset = int(first_ts / float(stream.time_base))
-                container.seek(seek_offset, any_frame=False, backward=True, stream=stream)
-
-            loaded_frames = []
-            loaded_ts = []
-            fallback_fps = float(stream.average_rate) if stream.average_rate is not None else 30.0
-            for frame_idx, frame in enumerate(container.decode(stream)):
-                if frame.pts is not None and stream.time_base is not None:
-                    ts = float(frame.pts * stream.time_base)
-                elif frame.time is not None:
-                    ts = float(frame.time)
-                else:
-                    ts = frame_idx / fallback_fps
-                if ts + tolerance_s < first_ts:
-                    continue
-                loaded_frames.append(frame.to_ndarray(format="rgb24"))
-                loaded_ts.append(ts)
-                if ts >= last_ts + tolerance_s:
-                    break
-        finally:
-            container.close()
-
-        if not loaded_frames:
-            raise RuntimeError("PyAV decoded no frames from downloaded mp4 bytes")
-        loaded_ts_arr = np.asarray(loaded_ts, dtype=np.float32)
-        query_ts = np.asarray(timestamps, dtype=np.float32)
-        closest = np.abs(query_ts[:, None] - loaded_ts_arr[None]).argmin(axis=1)
-        max_err = float(np.abs(query_ts - loaded_ts_arr[closest]).max())
-        if max_err > max(tolerance_s, 1.0 / 30.0 + tolerance_s):
-            _profile_record("video.timestamp_warning", 0.0, max_err=max_err)
-        arr = np.stack([loaded_frames[int(i)] for i in closest], axis=0)
-        frames = torch.from_numpy(arr).permute(0, 3, 1, 2).to(torch.float32) / 255.0
-        _profile_record(
-            "video.decode",
-            time.perf_counter() - t0,
-            frames=len(timestamps),
-            loaded=len(loaded_frames),
-            backend="pyav_direct",
-        )
-        del loaded_frames, loaded_ts, loaded_ts_arr, query_ts, closest
-        return frames
+        return _decode_mp4_path_lerobot(f.name, timestamps, tolerance_s=tolerance_s, backend=backend)
 
 
 @dataclass(frozen=True)
@@ -1105,8 +1138,10 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         path_index: list[dict[str, Any]] | None = None,
         use_path_index_cache: bool = True,
         shared_parquet_cache: Any | None = None,
+        local_video_path_decode: bool = True,
     ):
         self.spec = spec
+        self.local_video_path_decode = bool(local_video_path_decode)
         self._client: PetrelClient | LocalFileClient | None = None
         self.name = spec.name  # petrel/dataset_groups/intern_a1/a1_articulation_franka.yaml-datasets-name
         self.remote_root = spec.remote_root.rstrip("/") # dataset_groups/intern_a1/a1_articulation_franka.yaml-(root+datasets/name)
@@ -1134,6 +1169,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         self.num_frames_per_sample = int(num_frames)
         self.action_size = int(action_size if action_size is not None else num_frames - 1)
         self.global_sample_stride = int(global_sample_stride)
+        self.parquet_cache_size = max(0, int(parquet_cache_size))
+        self._parquet_cache: OrderedDict[int, dict[str, torch.Tensor | list[Any]]] = OrderedDict()
+        # This reader is reconstructed independently inside each DataLoader worker.
+        # Keep the cache process-local instead of using a multiprocessing proxy.
+        del shared_parquet_cache
         self._v3_data_file_range_cache: dict[int, tuple[int, int] | None] = {}
         self._v3_data_file_range_cache_max = 1024
         self.use_path_index_cache = bool(use_path_index_cache)
@@ -1763,7 +1803,12 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                 continue
             t0 = time.perf_counter()
             raw = local_path.read_bytes()
-            _profile_record("local_meta.read_bytes", time.perf_counter() - t0, bytes=len(raw), path=local_path.name)
+            _profile_record(
+                _io_profile_name("metadata_cache", local_path),
+                time.perf_counter() - t0,
+                bytes=len(raw),
+                path=local_path.name,
+            )
             return raw
 
         raw = self.client.get_bytes(self._remote_path(rel_path))
@@ -2194,7 +2239,32 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             return table.filter(pc.equal(table["episode_index"], int(source_episode_index)))
         return table
 
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        state["_client"] = None
+        state["_parquet_cache"] = OrderedDict()
+        return state
+
     def _load_episode_parquet(self, episode_index: int) -> dict[str, torch.Tensor | list[Any]]:
+        episode_index = int(episode_index)
+        if self.parquet_cache_size > 0:
+            cached = self._parquet_cache.get(episode_index)
+            if cached is not None:
+                self._parquet_cache.move_to_end(episode_index)
+                _profile_record("parquet.cache_hit", 0.0, dataset=self.name, episode=episode_index)
+                return cached
+
+        _profile_record("parquet.cache_miss", 0.0, dataset=self.name, episode=episode_index)
+        data = self._load_episode_parquet_uncached(episode_index)
+        if self.parquet_cache_size > 0:
+            self._parquet_cache[episode_index] = data
+            self._parquet_cache.move_to_end(episode_index)
+            while len(self._parquet_cache) > self.parquet_cache_size:
+                evicted_episode, _ = self._parquet_cache.popitem(last=False)
+                _profile_record("parquet.cache_evict", 0.0, dataset=self.name, episode=evicted_episode)
+        return data
+
+    def _load_episode_parquet_uncached(self, episode_index: int) -> dict[str, torch.Tensor | list[Any]]:
         rel_path = self._data_rel_path(episode_index)
 
         def read_filtered_table(path: str) -> tuple[Any, int, int]:
@@ -2242,8 +2312,42 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
     def _load_episode_video_bytes(self, episode_index: int, video_key: str) -> bytes:
         rel_path = self._video_rel_path(episode_index, video_key)
         raw = self._read_bytes(rel_path)
-        _profile_record("video.remote_bytes", 0.0, episode=episode_index, bytes=len(raw), key=video_key)
+        _profile_record("video.files_loaded", 0.0, episode=episode_index, bytes=len(raw), key=video_key)
         return raw
+
+    def decode_episode_video(self, episode_index: int, video_key: str, timestamps: list[float]) -> torch.Tensor:
+        """Decode requested frames, using direct path seek for the local backend."""
+        rel_path = self._video_rel_path(episode_index, video_key)
+        if self.spec.storage_backend == "local" and self.local_video_path_decode:
+            client = self.client
+            if not isinstance(client, LocalFileClient):
+                raise TypeError("local storage backend did not create a LocalFileClient")
+            path = client.resolve_path(self._remote_path(rel_path))
+            started = time.perf_counter()
+            try:
+                frames = _decode_mp4_path_lerobot(path, timestamps)
+            except Exception as exc:
+                _profile_record(
+                    "video.local_path_decode_fallback",
+                    time.perf_counter() - started,
+                    episode=episode_index,
+                    frames=len(timestamps),
+                    key=video_key,
+                    path=path.name,
+                )
+                logging.warning("Direct local video decode failed for %s; falling back to bytes: %s", path, exc)
+            else:
+                _profile_record(
+                    "video.local_path_decode_total",
+                    time.perf_counter() - started,
+                    episode=episode_index,
+                    frames=len(timestamps),
+                    key=video_key,
+                    path=path.name,
+                )
+                return frames
+        raw = self._load_episode_video_bytes(episode_index, video_key)
+        return _decode_mp4_bytes_lerobot(raw, timestamps)
 
     def _episode_task(
         self, episode_index: int, frame_idx: int, parquet: dict[str, torch.Tensor | list[Any]]
@@ -2611,8 +2715,25 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         return self._load_episode_parquet(episode_index)
 
     def get_step_item(self, episode_index: int, frame_idx: int) -> dict[str, Any]:
-        episode_meta_len = int(self.episodes_dict[episode_index]["length"])
         parquet = self._load_episode_parquet(episode_index)
+        return self._get_step_item_from_parquet(episode_index, frame_idx, parquet)
+
+    def get_step_items(self, episode_index: int, frame_indices: list[int]) -> list[dict[str, Any]]:
+        """Build multiple frames from one episode while loading its parquet only once."""
+        if not frame_indices:
+            return []
+        parquet = self._load_episode_parquet(episode_index)
+        return [
+            self._get_step_item_from_parquet(episode_index, int(frame_idx), parquet) for frame_idx in frame_indices
+        ]
+
+    def _get_step_item_from_parquet(
+        self,
+        episode_index: int,
+        frame_idx: int,
+        parquet: dict[str, torch.Tensor | list[Any]],
+    ) -> dict[str, Any]:
+        episode_meta_len = int(self.episodes_dict[episode_index]["length"])
         episode_start = self.episode_start_frame(int(episode_index))
         parquet_rows = _parquet_num_rows(parquet)
         episode_len = min(episode_meta_len, max(0, parquet_rows - episode_start))
@@ -2807,8 +2928,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         offset = self._video_timestamp_offset(episode_index, video_key)
         if offset:
             timestamps = [offset + ts for ts in timestamps]
-        raw = self._load_episode_video_bytes(episode_index, video_key)
-        return _decode_mp4_bytes_lerobot(raw, timestamps)
+        return self.decode_episode_video(episode_index, video_key, timestamps)
 
 
 def safe_hash(input_tuple: tuple[Any, ...]) -> int:
@@ -3261,8 +3381,12 @@ class MixedPetrelLeRobotDataset(torch.utils.data.Dataset):
         episode_index, frame_idx = self.datasets[ds_pos]._global_to_episode_frame(index - start)
         return ds_pos, int(episode_index), int(frame_idx)
 
+    def sample_step(self, index: int) -> tuple[int, int, int]:
+        """Resolve a mixture index without reading parquet or video data."""
+        return self._sample_step(int(index))
+
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        ds_pos, episode_index, frame_idx = self._sample_step(int(idx))
+        ds_pos, episode_index, frame_idx = self.sample_step(int(idx))
         item = self.datasets[ds_pos].get_step_item(episode_index, frame_idx)
         item["dataset_index"] = torch.tensor(ds_pos, dtype=torch.long)
         return item

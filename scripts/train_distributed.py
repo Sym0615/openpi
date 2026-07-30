@@ -96,8 +96,14 @@ def main() -> None:
     os.environ["OPENPI_TIMESTAMPED_RUN_DIR"] = "1"
 
     config = _config.get_config("pi05_interna1")
+    petrel_dataset_config = dataclasses.replace(
+        config.data.dataset,
+        local_video_path_decode=env_bool("OPENPI_LOCAL_VIDEO_PATH_DECODE", default=True),
+    )
+    data_config_factory = dataclasses.replace(config.data, dataset=petrel_dataset_config)
     config = dataclasses.replace(
         config,
+        data=data_config_factory,
         exp_name=run_id,
         checkpoint_base_dir=str(run_root),
         pytorch_weight_path=str(weight_path),
@@ -110,8 +116,13 @@ def main() -> None:
         resume=resume,
         wandb_enabled=env_bool("OPENPI_WANDB", default=False),
         num_workers=env_int("OPENPI_NUM_WORKERS", 16),
+        dataloader_worker_batch_size=env_int("OPENPI_WORKER_BATCH_SIZE", 16),
+        dataloader_prefetch_factor=env_int("OPENPI_PREFETCH_FACTOR", 2),
+        dataloader_in_order=env_bool("OPENPI_DATALOADER_IN_ORDER", default=False),
+        dataloader_pin_memory=env_bool("OPENPI_PIN_MEMORY", default=False),
+        dataloader_prewarm=env_bool("OPENPI_DATALOADER_PREWARM", default=True),
         profiling_enabled=profiling_enabled,
-        profiling_warmup_steps=env_int("OPENPI_PROFILE_WARMUP_STEPS", 10),
+        profiling_warmup_steps=env_int("OPENPI_PROFILE_WARMUP_STEPS", 1),
         profiling_log_interval=env_int("OPENPI_PROFILE_LOG_INTERVAL", 1),
         profiling_torch_trace=torch_trace_enabled,
         profiling_trace_active_steps=env_int("OPENPI_TRACE_ACTIVE_STEPS", 20),
@@ -132,6 +143,14 @@ def main() -> None:
             f"profiling={config.profiling_enabled} torch_trace={config.profiling_torch_trace} "
             f"steps={config.num_train_steps} global_batch_size={config.batch_size} "
             f"num_workers_per_rank={config.num_workers} resume={config.resume} overwrite={config.overwrite}",
+            flush=True,
+        )
+        print(
+            f"[train] worker_batch_size={config.dataloader_worker_batch_size} "
+            f"prefetch_factor={config.dataloader_prefetch_factor} "
+            f"in_order={config.dataloader_in_order} pin_memory={config.dataloader_pin_memory} "
+            f"prewarm={config.dataloader_prewarm} "
+            f"local_video_path_decode={config.data.dataset.local_video_path_decode}",
             flush=True,
         )
 

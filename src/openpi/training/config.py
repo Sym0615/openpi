@@ -561,6 +561,13 @@ class TrainConfig:
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2
+    # Optional batch size assigned to one worker task. The rank process concatenates completed worker
+    # micro-batches back to the local training batch. None preserves the historical one-task-per-batch behavior.
+    dataloader_worker_batch_size: int | None = None
+    dataloader_prefetch_factor: int | None = None
+    dataloader_in_order: bool = True
+    dataloader_pin_memory: bool = False
+    dataloader_prewarm: bool = False
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 

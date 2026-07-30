@@ -68,6 +68,19 @@ def snapshot(*, reset: bool = False) -> dict[str, dict[str, float | int]]:
     return result
 
 
+def merge_snapshot(values: dict[str, dict[str, float | int]]) -> None:
+    """Merge counters produced in another process into this process."""
+    if not _ENABLED or not values:
+        return
+    with _LOCK:
+        for name, value in values.items():
+            counter = _COUNTERS.setdefault(name, _Counter())
+            counter.count += int(value.get("count", 0))
+            counter.total_s += float(value.get("total_ms", 0.0)) / 1000.0
+            counter.max_s = max(counter.max_s, float(value.get("max_ms", 0.0)) / 1000.0)
+            counter.total_bytes += int(value.get("total_bytes", 0))
+
+
 class GpuMonitor:
     """Continuously sample one GPU with nvidia-smi and write samples to CSV."""
 

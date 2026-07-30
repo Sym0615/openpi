@@ -26,6 +26,7 @@ Multi-Node Training:
 import dataclasses
 import datetime
 import gc
+import itertools
 import json
 import logging
 import os
@@ -620,9 +621,9 @@ def _train_loop(config: _config.TrainConfig):
             rank_profile_dir,
         )
         if config.num_workers > 0:
-            logging.warning(
-                "Detailed access/preprocessing counters are worker-local. For exact stage attribution use "
-                "num_workers=0; use num_workers>0 runs to measure end-to-end DataLoader throughput."
+            logging.info(
+                "Detailed DataLoader counters will be collected in workers and merged into each rank's "
+                "data_metrics.jsonl. Worker total times overlap and can exceed wall-clock data_wait."
             )
 
     # Initialize wandb (only on main process)
@@ -824,6 +825,15 @@ def _train_loop(config: _config.TrainConfig):
     )
 
     data_iter = iter(loader)
+    if config.dataloader_prewarm:
+        prewarm_started = time.perf_counter()
+        prewarm_batch = next(data_iter)
+        prewarm_elapsed = time.perf_counter() - prewarm_started
+        logging.info("DataLoader pre-warm produced one local batch in %.3fs on rank=%d", prewarm_elapsed, rank)
+        if use_ddp:
+            dist.barrier()
+        data_iter = itertools.chain((prewarm_batch,), data_iter)
+        log_rank_phase(f"DataLoader pre-warm complete elapsed={prewarm_elapsed:.3f}s")
     log_rank_phase(f"training iteration ready initial_global_step={global_step}")
     logging_interval = config.profiling_log_interval if config.profiling_enabled else config.log_interval
     while global_step < config.num_train_steps:
@@ -944,10 +954,11 @@ def _train_loop(config: _config.TrainConfig):
                 }
                 with rank_step_metrics_path.open("a", encoding="utf-8") as output:
                     output.write(json.dumps(local_profile_payload, ensure_ascii=False) + "\n")
+                data_events = _profiling.snapshot(reset=True)
                 data_payload = {
                     "step": global_step,
                     "rank": rank,
-                    "events": _profiling.snapshot(reset=True),
+                    "events": data_events,
                 }
                 with rank_data_metrics_path.open("a", encoding="utf-8") as output:
                     output.write(json.dumps(data_payload, ensure_ascii=False) + "\n")
@@ -987,6 +998,22 @@ def _train_loop(config: _config.TrainConfig):
                         global_gpu_values.get("gpu_util_avg_min", float("nan")),
                         global_gpu_values.get("gpu_util_max", float("nan")),
                     )
+                    top_data_events = sorted(
+                        data_events.items(),
+                        key=lambda item: float(item[1].get("total_ms", 0.0)),
+                        reverse=True,
+                    )[:10]
+                    if top_data_events:
+                        logging.info(
+                            "dataloader profile step=%d rank=0 top=%s",
+                            global_step,
+                            "; ".join(
+                                f"{name}:total={float(values['total_ms']):.1f}ms/"
+                                f"count={int(values['count'])}/max={float(values['max_ms']):.1f}ms/"
+                                f"MBps={float(values['throughput_mb_s']):.1f}"
+                                for name, values in top_data_events
+                            ),
+                        )
                     with profile_metrics_path.open("a", encoding="utf-8") as output:
                         output.write(json.dumps(profile_payload, ensure_ascii=False) + "\n")
 

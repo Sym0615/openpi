@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import dataclasses
 from types import SimpleNamespace
 
@@ -17,6 +18,27 @@ class _FakePetrelDataset:
         self.action_target_dim = 4
         self.video_keys = ["head", "left_wrist"]
         self.fps = 10.0
+        self.step_item_batches = []
+
+    @staticmethod
+    def _step_item(episode_index, frame_index):
+        return {
+            "dataset_name": "fake",
+            "episode_index": torch.tensor(episode_index),
+            "frame_index": torch.tensor([frame_index]),
+            "observation.state": torch.arange(4, dtype=torch.float32)[None],
+            "action": torch.arange(12, dtype=torch.float32).reshape(3, 4),
+            "observation.state_dim_is_pad": torch.tensor([False, True, False, True]),
+            "action_dim_is_pad": torch.tensor([False, True, False, True]),
+            "task": "pick up the cup",
+        }
+
+    def get_step_item(self, episode_index, frame_index):
+        return self._step_item(episode_index, frame_index)
+
+    def get_step_items(self, episode_index, frame_indices):
+        self.step_item_batches.append((episode_index, list(frame_indices)))
+        return [self._step_item(episode_index, frame_index) for frame_index in frame_indices]
 
     def get_video_for_item(self, item, *, video_key, sample_indices):
         del item, sample_indices
@@ -46,18 +68,14 @@ class _FakeMixedDataset:
     def set_epoch(self, epoch):
         self.epoch = epoch
 
+    def sample_step(self, index):
+        return 0, 2, index
+
     def __getitem__(self, index):
-        return {
-            "dataset_name": "fake",
-            "dataset_index": torch.tensor(0),
-            "episode_index": torch.tensor(2),
-            "frame_index": torch.tensor([index]),
-            "observation.state": torch.arange(4, dtype=torch.float32)[None],
-            "action": torch.arange(12, dtype=torch.float32).reshape(3, 4),
-            "observation.state_dim_is_pad": torch.tensor([False, True, False, True]),
-            "action_dim_is_pad": torch.tensor([False, True, False, True]),
-            "task": "pick up the cup",
-        }
+        dataset_index, episode_index, frame_index = self.sample_step(index)
+        item = self.datasets[dataset_index].get_step_item(episode_index, frame_index)
+        item["dataset_index"] = torch.tensor(dataset_index)
+        return item
 
 
 def _fake_reader(action_dim=8):
@@ -162,6 +180,36 @@ def test_petrel_dataset_batch_decode(monkeypatch, tmp_path):
 
     assert len(samples) == 3
     assert all(sample["actions"].shape == (3, 8) for sample in samples)
+    assert dataset._datasets[0].step_item_batches == [(2, [0, 1, 2])]  # noqa: SLF001
+
+
+def test_petrel_episode_parquet_lru_cache_hits_and_evicts():
+    dataset = object.__new__(petrel_dataset.reader.PetrelLeRobotDataset)
+    dataset.name = "fake"
+    dataset._client = object()  # noqa: SLF001
+    dataset.parquet_cache_size = 2
+    dataset._parquet_cache = OrderedDict()  # noqa: SLF001
+    loads = []
+
+    def load_uncached(episode_index):
+        loads.append(episode_index)
+        return {"episode": torch.tensor([episode_index])}
+
+    dataset._load_episode_parquet_uncached = load_uncached  # noqa: SLF001
+
+    first = dataset._load_episode_parquet(1)  # noqa: SLF001
+    assert dataset._load_episode_parquet(1) is first  # noqa: SLF001
+    dataset._load_episode_parquet(2)  # noqa: SLF001
+    assert dataset._load_episode_parquet(1) is first  # noqa: SLF001
+    dataset._load_episode_parquet(3)  # noqa: SLF001
+    dataset._load_episode_parquet(2)  # noqa: SLF001
+
+    assert loads == [1, 2, 3, 2]
+    assert list(dataset._parquet_cache) == [3, 2]  # noqa: SLF001
+
+    worker_state = dataset.__getstate__()
+    assert worker_state["_client"] is None
+    assert worker_state["_parquet_cache"] == OrderedDict()
 
 
 def test_fast_petrel_accumulator_matches_exact_small_statistics():

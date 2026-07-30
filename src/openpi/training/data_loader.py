@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Sequence
+import dataclasses
 import logging
 import multiprocessing
 import os
@@ -92,6 +93,44 @@ class TransformedDataset(Dataset[T_co]):
     @property
     def requires_worker_restart_each_epoch(self) -> bool:
         return bool(getattr(self._dataset, "requires_worker_restart_each_epoch", False))
+
+    @property
+    def training_block_size(self) -> int:
+        return int(getattr(self._dataset, "training_block_size", 1))
+
+
+class ContiguousDistributedSampler(torch.utils.data.Sampler[int]):
+    """Give each DDP rank one contiguous shard so episode-local index blocks stay intact."""
+
+    def __init__(
+        self,
+        dataset,
+        *,
+        num_replicas: int,
+        rank: int,
+        block_size: int = 1,
+        drop_last: bool = True,
+    ):
+        if rank < 0 or rank >= num_replicas:
+            raise ValueError(f"rank {rank} is outside [0, {num_replicas})")
+        self._dataset = dataset
+        self._num_replicas = int(num_replicas)
+        self._rank = int(rank)
+        if not drop_last:
+            raise ValueError("ContiguousDistributedSampler currently requires drop_last=True")
+        block_size = max(1, int(block_size))
+        blocks_per_rank = (len(dataset) // block_size) // self._num_replicas
+        self._num_samples = blocks_per_rank * block_size
+
+    def __iter__(self):
+        start = self._rank * self._num_samples
+        return iter(range(start, start + self._num_samples))
+
+    def __len__(self) -> int:
+        return self._num_samples
+
+    def set_epoch(self, epoch: int) -> None:
+        del epoch
 
 
 class IterableTransformedDataset(IterableDataset[T_co]):
@@ -305,6 +344,10 @@ def create_data_loader(
         seed=config.seed,
         skip_norm_stats=skip_norm_stats,
         framework=framework,
+        worker_batch_size=config.dataloader_worker_batch_size,
+        prefetch_factor=config.dataloader_prefetch_factor,
+        in_order=config.dataloader_in_order,
+        pin_memory=config.dataloader_pin_memory,
     )
 
 
@@ -321,6 +364,10 @@ def create_torch_data_loader(
     num_workers: int = 0,
     seed: int = 0,
     framework: str = "jax",
+    worker_batch_size: int | None = None,
+    prefetch_factor: int | None = None,
+    in_order: bool = True,
+    pin_memory: bool = False,
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
     """Create a data loader for training.
 
@@ -352,13 +399,23 @@ def create_torch_data_loader(
     sampler = None
     if framework == "pytorch":
         if torch.distributed.is_initialized():
-            sampler = torch.utils.data.distributed.DistributedSampler(
-                dataset,
-                num_replicas=torch.distributed.get_world_size(),
-                rank=torch.distributed.get_rank(),
-                shuffle=shuffle,
-                drop_last=True,
-            )
+            if getattr(dataset, "prefer_sequential_indices", False) and not shuffle:
+                sampler = ContiguousDistributedSampler(
+                    dataset,
+                    num_replicas=torch.distributed.get_world_size(),
+                    rank=torch.distributed.get_rank(),
+                    block_size=getattr(dataset, "training_block_size", 1),
+                    drop_last=True,
+                )
+                logging.info("Using contiguous DDP shards to preserve Petrel episode blocks.")
+            else:
+                sampler = torch.utils.data.distributed.DistributedSampler(
+                    dataset,
+                    num_replicas=torch.distributed.get_world_size(),
+                    rank=torch.distributed.get_rank(),
+                    shuffle=shuffle,
+                    drop_last=True,
+                )
             local_batch_size = batch_size // torch.distributed.get_world_size()
         else:
             local_batch_size = batch_size
@@ -376,6 +433,10 @@ def create_torch_data_loader(
         num_workers=num_workers,
         seed=seed,
         framework=framework,
+        worker_batch_size=worker_batch_size,
+        prefetch_factor=prefetch_factor,
+        in_order=in_order,
+        pin_memory=pin_memory,
     )
 
     return DataLoaderImpl(data_config, data_loader)
@@ -437,6 +498,10 @@ class TorchDataLoader:
         num_workers: int = 0,
         seed: int = 0,
         framework: str = "jax",
+        worker_batch_size: int | None = None,
+        prefetch_factor: int | None = None,
+        in_order: bool = True,
+        pin_memory: bool = False,
     ):
         """Create a PyTorch data loader.
 
@@ -461,6 +526,18 @@ class TorchDataLoader:
         if len(dataset) < local_batch_size:
             raise ValueError(f"Local batch size ({local_batch_size}) is larger than the dataset size ({len(dataset)}).")
 
+        worker_batch_size = local_batch_size if worker_batch_size is None else int(worker_batch_size)
+        if worker_batch_size <= 0:
+            raise ValueError(f"Worker batch size must be positive, got {worker_batch_size}.")
+        if local_batch_size % worker_batch_size != 0:
+            raise ValueError(
+                f"Local batch size ({local_batch_size}) must be divisible by worker batch size ({worker_batch_size})."
+            )
+        if prefetch_factor is not None and prefetch_factor <= 0:
+            raise ValueError(f"prefetch_factor must be positive when provided, got {prefetch_factor}.")
+        self._local_batch_size = local_batch_size
+        self._worker_batch_size = worker_batch_size
+
         # Store sharding - None for PyTorch, JAX sharding for JAX
         self._sharding = sharding
         if sharding is None and framework == "jax":
@@ -481,7 +558,7 @@ class TorchDataLoader:
         generator.manual_seed(seed)
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
-            batch_size=local_batch_size,
+            batch_size=worker_batch_size,
             shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
             sampler=sampler,
             num_workers=num_workers,
@@ -492,6 +569,20 @@ class TorchDataLoader:
             worker_init_fn=_worker_init_fn,
             drop_last=True,
             generator=generator,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            in_order=in_order,
+            pin_memory=pin_memory,
+        )
+        logging.info(
+            "DataLoader worker_batch_size=%d local_batch_size=%d micro_batches_per_step=%d "
+            "workers=%d prefetch_factor=%s in_order=%s pin_memory=%s",
+            worker_batch_size,
+            local_batch_size,
+            local_batch_size // worker_batch_size,
+            num_workers,
+            prefetch_factor,
+            in_order,
+            pin_memory,
         )
 
     @property
@@ -509,6 +600,7 @@ class TorchDataLoader:
             if callable(sampler_set_epoch):
                 sampler_set_epoch(epoch)
             data_iter = iter(self._data_loader)
+            pending_batches = []
             while True:
                 if self._num_batches is not None and num_items >= self._num_batches:
                     return
@@ -516,6 +608,17 @@ class TorchDataLoader:
                     batch = next(data_iter)
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
+                if isinstance(batch, _ProfiledBatch):
+                    _profiling.merge_snapshot(batch.metrics)
+                    batch = batch.batch
+                pending_batches.append(batch)
+                if len(pending_batches) * self._worker_batch_size < self._local_batch_size:
+                    continue
+                if len(pending_batches) > 1:
+                    started = time.perf_counter()
+                    batch = jax.tree.map(lambda *xs: np.concatenate(xs, axis=0), *pending_batches)
+                    _profiling.record("dataloader.microbatch_concat", time.perf_counter() - started)
+                pending_batches.clear()
                 num_items += 1
                 # For JAX, convert to sharded arrays; for PyTorch, return torch tensors
                 if self._sharding is not None:
@@ -525,11 +628,22 @@ class TorchDataLoader:
             epoch += 1
 
 
+@dataclasses.dataclass
+class _ProfiledBatch:
+    batch: typing.Any
+    metrics: dict[str, dict[str, float | int]]
+
+
 def _collate_fn(items):
     """Collate the batch elements into batched numpy arrays."""
     # Make sure to convert to numpy arrays before stacking since some of the incoming elements
     # may be JAX arrays.
-    return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *items)
+    started = time.perf_counter()
+    batch = jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *items)
+    if not _profiling.enabled():
+        return batch
+    _profiling.record("dataloader.collate", time.perf_counter() - started)
+    return _ProfiledBatch(batch=batch, metrics=_profiling.snapshot(reset=True))
 
 
 def _worker_init_fn(worker_id: int) -> None:
