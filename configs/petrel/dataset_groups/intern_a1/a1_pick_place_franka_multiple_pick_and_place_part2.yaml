@@ -2,75 +2,8 @@ schema: openpi_petrel_dataset_group_v1
 name: a1_pick_place_franka_multiple_pick_and_place_part2
 category: intern_a1
 profile: a1_single_ee
-control_profiles:
-  a1_single_ee:
-    control_type: single_arm
-    mapping:
-      layout: robot
-      single_arm_slot: right
-      pose_input: xyz_quat_wxyz
-      action_pose_semantics: absolute_target
-      state_pose_output: xyz_rot6d
-      action_pose_output: xyz_rotvec
-      missing_policy: pad_and_mask
-      frame_transform:
-        world_from_source: robot_to_opencv
-        source_ee_from_canonical_ee: ee_source_z_to_canonical_z
-      slots:
-        right:
-          joint:
-            state_key: states.joint.position
-            action_key: actions.joint.position
-            raw_slice:
-            - 0
-            - 7
-            target_slice:
-            - 40
-            - 47
-          ee:
-            state_key: states.tcp_to_robot_pose
-            action_key: actions.tcp_to_robot_pose
-            raw_slice:
-            - 0
-            - 7
-            state_target_slice:
-            - 47
-            - 56
-            action_target_slice:
-            - 47
-            - 53
-          gripper:
-            state_key: states.gripper.position
-            action_key: actions.gripper.openness
-            raw_slice:
-            - 0
-            - 1
-            target_slice:
-            - 56
-            - 57
-    fields:
-      state:
-        keys:
-        - states.joint.position
-        - states.tcp_to_robot_pose
-        - states.gripper.position
-      action:
-        keys:
-        - actions.joint.position
-        - actions.tcp_to_robot_pose
-        - actions.gripper.openness
-      video:
-        key: auto
-      language:
-        source: meta/tasks.parquet
-      timestamp:
-        key: timestamp
-      frame_index:
-        key: frame_index
-      task_index:
-        key: task_index
 format: v3
-root: manip:manip-dataset/private/sim/InternData-A1_v30/pick_and_place_tasks/franka/multiple_pick_and_place_part2
+root: pick_and_place_tasks/franka/multiple_pick_and_place_part2
 fields:
   video:
     keys:

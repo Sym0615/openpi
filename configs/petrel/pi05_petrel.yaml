@@ -15,12 +15,15 @@ openpi:
     - left_wrist_0_rgb
     - right_wrist_0_rgb
   normalization: quantile
-  control_projection: compact_valid
+  # Intentionally omitted until every mixed-data control profile is migrated to the 32D mapped contract.
 storage:
-  petrel_conf: ~/petreloss.conf
   parquet_cache_size: 8
-  metadata_cache: data/petrel_cache/meta/{remote}
-  path_index_cache: data/petrel_cache/path_index/{remote}
+  # The mixed config keeps one cache namespace under its dataset_id.
+  # It remains unavailable for training until every legacy profile is migrated to mapped target_slot mappings.
+  metadata_cache: data/petrel_cache/meta/{dataset_id}/{remote}
+  path_index_cache: data/petrel_cache/path_index/{dataset_id}/{remote}
+norm_stats:
+  dataset_group_template: dataset/{dataset_id}
 sampling:
   state_frames: 1
   action_horizon: 16
@@ -47,35 +50,30 @@ source_control_space:
   slots:
     left:
       joint:
-      - 0
-      - 7
+        indices: [0, 1, 2, 3, 4, 5, 6]
       ee:
-      - 7
-      - 16
+        indices: [7, 8, 9, 10, 11, 12, 13, 14, 15]
       gripper:
-      - 16
-      - 17
+        indices: [16]
       hand:
-      - 17
-      - 40
+        indices: [17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
     right:
       joint:
-      - 40
-      - 47
+        indices: [40, 41, 42, 43, 44, 45, 46]
       ee:
-      - 47
-      - 56
+        indices: [47, 48, 49, 50, 51, 52, 53, 54, 55]
       gripper:
-      - 56
-      - 57
+        indices: [56]
       hand:
-      - 57
-      - 80
+        indices: [57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79]
   missing_policy: pad_and_mask
   pose:
     state: xyz_rot6d
     action: delta_xyz_rotvec
   camera_frame_delta: false
+control_profile_files:  # TODO
+- control_profiles/intern_a1.yaml
+- control_profiles/abc130k.yaml
 dataset_files:
   directory: dataset_groups
   recursive: true

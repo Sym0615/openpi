@@ -73,7 +73,8 @@ def main() -> None:
     resume = env_bool("OPENPI_RESUME", default=False)
     os.environ["OPENPI_TIMESTAMPED_RUN_DIR"] = "1"
 
-    config = _config.get_config("pi05_interna1")
+    config_name = os.environ.get("OPENPI_CONFIG_NAME", "pi05_abc130k")
+    config = _config.get_config(config_name)
     config = dataclasses.replace(
         config,
         exp_name=run_id,
@@ -97,6 +98,7 @@ def main() -> None:
     )
 
     print(f"[train] workdir={openpi_workdir}")
+    print(f"[train] config_name={config_name}")
     print(f"[train] run_dir_template={config.checkpoint_dir.parent}/{run_id}_<UTC start time>")
     print(f"[train] weights={config.pytorch_weight_path}")
     print(f"[train] CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")

@@ -997,6 +997,20 @@ _CONFIGS = [
         num_workers=16,
     ),
     TrainConfig(
+        # ABC-130K-v3 local RGB datasets. Three-camera schemas map directly to
+        # Pi0 slots; four-camera schemas select top-left and both wrist views.
+        name="pi05_abc130k",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=PetrelDataConfig(
+            repo_id="abc130k",
+            dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_abc130k.yaml"),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/datahub/public/model/pi05_base_pytorch_bf16",
+        pytorch_training_precision="bfloat16",
+        num_workers=16,
+    ),
+    TrainConfig(
         # This config is for fine-tuning pi05-DROID on a custom (smaller) DROID dataset.
         # Here, we use LeRobot data format (like for all other fine-tuning examples)
         # To convert your custom DROID dataset (<10s of hours) to LeRobot format, see examples/droid/convert_droid_data_to_lerobot.py

@@ -1,18 +1,77 @@
 # InternData-A1-only OpenPI configuration. Common control mappings and the
 # OpenPI tensor contract are inherited from the repository-local Petrel config.
-extends: pi05_petrel.yaml
+schema: openpi_petrel_v1
 dataset_id: intern_a1
 openpi:
-  control_projection: pi05_aloha_32
+  state_dim: 32
+  action_dim: 32
+  action_horizon: 16
+  images:
+    size:
+    - 224
+    - 224
+    dtype: uint8
+    channels: rgb
+    slots:
+    - base_0_rgb
+    - left_wrist_0_rgb
+    - right_wrist_0_rgb
+  normalization: quantile
+  control_projection: mapped
 storage:
-  # Read the mounted local mirror by default. Override the backend from the training CLI when needed.
-  backend: local
+  parquet_cache_size: 8
   local_root: /manip/private/sim/InternData-A1_v30
-  local_remote_prefix: manip:manip-dataset/private/sim/InternData-A1_v30
+  metadata_cache: data/petrel_cache/meta/{dataset_id}/{remote}
+  path_index_cache: data/petrel_cache/path_index/{dataset_id}/{remote}
+norm_stats:
+  dataset_group_template: dataset/{dataset_id}
+sampling:
+  state_frames: 1
+  action_horizon: 16
+  stride: 1
+  allow_end_padding: false
+  training_block_size: 16
+  training_frame_stride: 1
 mixture:
+  seed: 42
+  balance_by_dataset: false
+  balance_by_trajectory: true
+  distribute_category_weight_by_valid_windows: true
   category_weights:
     intern_a1: 1.0
+control_profile_files:
+- control_profiles/intern_a1.yaml
 dataset_files:
   directory: dataset_groups/intern_a1
   recursive: false
   pattern: '*.yaml'
+source_control_space:
+  name: openpi
+  dim: 32
+  slots:
+    left:
+      joint:
+        indices: [0, 1, 2, 3, 4, 5, 26]
+      gripper:
+        indices: [6]
+      ee:
+        indices: [14, 15, 16, 17, 18, 19]
+    right:
+      joint:
+        indices: [7, 8, 9, 10, 11, 12, 27]
+      gripper:
+        indices: [13]
+      ee:
+        indices: [20, 21, 22, 23, 24, 25]
+    reserved:
+      pad:
+        indices: [28, 29, 30, 31]
+  missing_policy: pad_and_mask
+  pose:
+    state: xyz_rpy
+    action: delta_xyz_rpy
+  action_semantics:
+    joint: delta
+    gripper: absolute
+    ee: delta
+  camera_frame_delta: false

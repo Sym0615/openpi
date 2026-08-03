@@ -1,9 +1,12 @@
 from collections import OrderedDict
 import dataclasses
+import pathlib
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
+import yaml
 
 from openpi import transforms
 from openpi.shared import normalize
@@ -14,8 +17,8 @@ class _FakePetrelDataset:
     def __init__(self, spec, **kwargs):
         del kwargs
         self.name = spec.name
-        self.state_target_dim = 4
-        self.action_target_dim = 4
+        self.state_target_dim = 8
+        self.action_target_dim = 8
         self.video_keys = ["head", "left_wrist"]
         self.fps = 10.0
         self.step_item_batches = []
@@ -26,10 +29,10 @@ class _FakePetrelDataset:
             "dataset_name": "fake",
             "episode_index": torch.tensor(episode_index),
             "frame_index": torch.tensor([frame_index]),
-            "observation.state": torch.arange(4, dtype=torch.float32)[None],
-            "action": torch.arange(12, dtype=torch.float32).reshape(3, 4),
-            "observation.state_dim_is_pad": torch.tensor([False, True, False, True]),
-            "action_dim_is_pad": torch.tensor([False, True, False, True]),
+            "observation.state": torch.tensor([[0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+            "action": torch.arange(24, dtype=torch.float32).reshape(3, 8),
+            "observation.state_dim_is_pad": torch.tensor([False, True, False, True, True, True, True, True]),
+            "action_dim_is_pad": torch.tensor([False, True, False, True, True, True, True, True]),
             "task": "pick up the cup",
         }
 
@@ -80,13 +83,14 @@ class _FakeMixedDataset:
 
 def _fake_reader(action_dim=8):
     return SimpleNamespace(
-        load_dataset_specs=lambda path, conf, **kwargs: (
+        load_dataset_specs=lambda path, **kwargs: (
             {
                 "openpi": {
                     "state_dim": action_dim,
                     "action_dim": action_dim,
                     "action_horizon": 3,
                     "normalization": "quantile",
+                    "control_projection": "mapped",
                 },
                 "storage": {"parquet_cache_size": 8},
                 "sampling": {"num_frames": 1, "global_sample_stride": 1},
@@ -126,8 +130,7 @@ def test_petrel_dataset_outputs_openpi_schema(monkeypatch, tmp_path):
 
     assert sample["state"].shape == (8,)
     assert sample["actions"].shape == (3, 8)
-    np.testing.assert_array_equal(sample["state"][:2], np.asarray([0.0, 2.0]))
-    np.testing.assert_array_equal(sample["state"][2:], np.zeros(6))
+    np.testing.assert_array_equal(sample["state"], np.asarray([0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
     assert sample["prompt"] == "Robot instruction: pick up the cup"
     assert sample["image"]["base_0_rgb"].shape == (6, 8, 3)
     assert sample["image"]["base_0_rgb"].dtype == np.uint8
@@ -159,9 +162,18 @@ def test_petrel_dataset_stats_mode_skips_video_decode(monkeypatch, tmp_path):
     sample = dataset[0]
     samples = dataset.__getitems__([0, 1])
 
-    assert set(sample) == {"state", "actions", "prompt"}
+    expected_keys = {
+        "state",
+        "actions",
+        "prompt",
+        "stats_group",
+        "stats_group_fallbacks",
+        "state_dim_is_pad",
+        "actions_dim_is_pad",
+    }
+    assert set(sample) == expected_keys
     assert len(samples) == 2
-    assert all(set(item) == {"state", "actions", "prompt"} for item in samples)
+    assert all(set(item) == expected_keys for item in samples)
 
 
 def test_petrel_dataset_batch_decode(monkeypatch, tmp_path):
@@ -247,162 +259,253 @@ def test_fast_petrel_episode_blocks_preserve_global_cap():
     assert all(int(unit["quota"]) <= int(unit["windows"]) for unit in selected)
 
 
+def test_fast_petrel_episode_blocks_cover_every_norm_group():
+    from openpi.training import petrel_norm_stats
+
+    units = [
+        {
+            "windows": 1000,
+            "spec_index": 0,
+            "trajectory_pos": 0,
+            "episode_index": 0,
+            "stats_groups": ("profile/3cam", "dataset/abc"),
+        },
+        {
+            "windows": 10,
+            "spec_index": 1,
+            "trajectory_pos": 0,
+            "episode_index": 1,
+            "stats_groups": ("profile/4cam", "dataset/abc"),
+        },
+    ]
+    selected = petrel_norm_stats._select_episode_blocks(  # noqa: SLF001
+        units,
+        target=64,
+        block_size=64,
+        seed=7,
+    )
+
+    covered = {group for unit in selected if int(unit["quota"]) > 0 for group in unit["stats_groups"]}
+    assert covered == {"profile/3cam", "profile/4cam", "dataset/abc"}
+    assert sum(int(unit["quota"]) for unit in selected) == 64
+
+
 def test_batched_petrel_projection_matches_openpi_shape():
     item = {
         "dataset_name": "batched",
-        "observation.state": torch.arange(12, dtype=torch.float32).reshape(3, 1, 4),
-        "action": torch.arange(36, dtype=torch.float32).reshape(3, 3, 4),
-        "observation.state_dim_is_pad": torch.tensor([False, True, False, True]),
-        "action_dim_is_pad": torch.tensor([False, True, False, True]),
+        "observation.state": torch.arange(24, dtype=torch.float32).reshape(3, 1, 8),
+        "action": torch.arange(72, dtype=torch.float32).reshape(3, 3, 8),
+        "observation.state_dim_is_pad": torch.tensor([False, True, False, True, True, True, True, True]),
+        "action_dim_is_pad": torch.tensor([False, True, False, True, True, True, True, True]),
     }
 
     state, actions = petrel_dataset.project_petrel_features(item, output_dim=8)
 
     assert state.shape == (3, 1, 8)
     assert actions.shape == (3, 3, 8)
-    torch.testing.assert_close(state[..., 2:], torch.zeros(3, 1, 6))
+    torch.testing.assert_close(state[..., [1, 3, 4, 5, 6, 7]], torch.zeros(3, 1, 6))
 
 
-def test_compact_projection_preserves_all_actions_before_state_only_dims(monkeypatch, tmp_path):
-    config_path = tmp_path / "dataset.yaml"
-    config_path.write_text("mixture: {}", encoding="utf-8")
-    fake = _fake_reader(action_dim=32)
-    for name, value in vars(fake).items():
-        monkeypatch.setattr(petrel_dataset.reader, name, value)
-    dataset = petrel_dataset.PetrelDataset(
-        petrel_dataset.PetrelDatasetConfig(dataset_config=str(config_path), skip_bad_videos=False),
-        action_horizon=3,
-        model_action_dim=32,
-    )
+def test_mapped_projection_converts_only_declared_absolute_joint_actions_to_delta():
+    state = torch.arange(32, dtype=torch.float32).reshape(1, 32)
+    actions = torch.stack([state[0] + 10.0, state[0] + 20.0])
     item = {
-        "dataset_name": "dual_arm",
-        "observation.state": torch.arange(34, dtype=torch.float32)[None],
-        "action": torch.arange(3 * 34, dtype=torch.float32).reshape(3, 34),
-        "observation.state_dim_is_pad": torch.zeros(34, dtype=torch.bool),
-        "action_dim_is_pad": torch.tensor([False] * 28 + [True] * 6),
-    }
-
-    state, actions = dataset._project_features(item)  # noqa: SLF001
-
-    assert state.shape == (1, 32)
-    assert actions.shape == (3, 32)
-    torch.testing.assert_close(state[0], torch.arange(32, dtype=torch.float32))
-    torch.testing.assert_close(actions[0, :28], torch.arange(28, dtype=torch.float32))
-    torch.testing.assert_close(actions[0, 28:], torch.zeros(4))
-
-
-def _canonical_arm_item(*, joint_count: int, single_right: bool = False) -> dict:
-    state = torch.zeros(1, 80, dtype=torch.float32)
-    actions = torch.zeros(3, 80, dtype=torch.float32)
-    state_padding = torch.ones(80, dtype=torch.bool)
-    action_padding = torch.ones(80, dtype=torch.bool)
-    identity_rot6d = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
-
-    sides = ((40, 47, 56, 14),) if single_right else ((0, 7, 16, 7), (40, 47, 56, 14))
-    for joint_start, ee_start, gripper_index, value_base in sides:
-        state[..., joint_start : joint_start + joint_count] = torch.arange(joint_count) + value_base
-        actions[..., joint_start : joint_start + joint_count] = torch.arange(joint_count) + value_base + 100
-        state_padding[joint_start : joint_start + joint_count] = False
-        action_padding[joint_start : joint_start + joint_count] = False
-
-        state[..., ee_start : ee_start + 3] = torch.tensor([1.0, 2.0, 3.0]) + value_base
-        state[..., ee_start + 3 : ee_start + 9] = identity_rot6d
-        actions[..., ee_start : ee_start + 6] = torch.arange(6) + value_base + 200
-        state_padding[ee_start : ee_start + 9] = False
-        action_padding[ee_start : ee_start + 6] = False
-
-        state[..., gripper_index] = value_base + 30
-        actions[..., gripper_index] = value_base + 300
-        state_padding[gripper_index] = False
-        action_padding[gripper_index] = False
-
-    return {
-        "dataset_name": "semantic_arm",
+        "dataset_name": "mapped",
         "observation.state": state,
         "action": actions,
-        "observation.state_dim_is_pad": state_padding,
-        "action_dim_is_pad": action_padding,
+        "observation.state_dim_is_pad": torch.zeros(32, dtype=torch.bool),
+        "action_dim_is_pad": torch.zeros(32, dtype=torch.bool),
+        "action_delta_from_state_indices": (0, 5, 7, 12, 26, 27),
     }
 
+    mapped_state, mapped_actions = petrel_dataset.project_petrel_features(item, 32)
 
-def test_pi05_aloha_32_matches_official_aloha_slots_across_embodiments():
-    dual6_state, dual6_actions = petrel_dataset.project_petrel_features(
-        _canonical_arm_item(joint_count=6), output_dim=32, projection="pi05_aloha_32"
+    torch.testing.assert_close(mapped_state, state)
+    torch.testing.assert_close(mapped_actions[:, [0, 5, 7, 12, 26, 27]], torch.tensor([[10.0] * 6, [20.0] * 6]))
+    # Gripper and EE slots are already expressed in their target semantics and are not subtracted again.
+    torch.testing.assert_close(mapped_actions[:, 14:26], actions[:, 14:26])
+    torch.testing.assert_close(mapped_actions[:, [6, 13]], actions[:, [6, 13]])
+
+
+def test_source_control_space_requires_explicit_indices():
+    contract = {"state_dim": 32, "action_dim": 32, "control_projection": "mapped"}
+    control_space = {
+        "name": "openpi",
+        "dim": 32,
+        "slots": {"left": {"joint": [0, 7]}},
+    }
+
+    with pytest.raises(TypeError, match="containing only indices"):
+        petrel_dataset.reader._validate_source_control_space(control_space, contract)  # noqa: SLF001
+
+
+def test_pose_rpy_round_trip_and_delta_output_format():
+    rpy = torch.tensor([[0.2, -0.3, 0.4], [-0.5, 0.1, -0.2]], dtype=torch.float32)
+    rotvec = petrel_dataset.reader._rpy_to_rotvec(rpy)  # noqa: SLF001
+    recovered = petrel_dataset.reader._rotvec_to_rpy(rotvec)  # noqa: SLF001
+    torch.testing.assert_close(recovered, rpy, atol=1e-5, rtol=1e-5)
+
+    pose = torch.cat([torch.tensor([[1.0, 2.0, 3.0]]), rotvec[:1]], dim=-1)
+    formatted = petrel_dataset.reader._format_xyz_rotvec_pose(pose, "delta_xyz_rpy")  # noqa: SLF001
+    torch.testing.assert_close(formatted, torch.tensor([[1.0, 2.0, 3.0, 0.2, -0.3, 0.4]]), atol=1e-5, rtol=1e-5)
+
+
+def test_absolute_ee_target_becomes_world_translation_and_relative_rpy_delta():
+    current_source = torch.zeros(1, 6)
+    target_source = torch.tensor([[1.0, 2.0, 3.0, 0.0, 0.0, 0.1]])
+    frame_transform = {
+        "world_from_source": "robot_to_opencv",
+        "source_ee_from_canonical_ee": "identity",
+    }
+    current = petrel_dataset.reader._transform_xyz_rotvec_pose(  # noqa: SLF001
+        petrel_dataset.reader._pose_to_xyz_rotvec(current_source, "xyz_rpy"),  # noqa: SLF001
+        frame_transform,
+        is_delta=False,
     )
-    dual7_state, dual7_actions = petrel_dataset.project_petrel_features(
-        _canonical_arm_item(joint_count=7), output_dim=32, projection="pi05_aloha_32"
+    target = petrel_dataset.reader._transform_xyz_rotvec_pose(  # noqa: SLF001
+        petrel_dataset.reader._pose_to_xyz_rotvec(target_source, "xyz_rpy"),  # noqa: SLF001
+        frame_transform,
+        is_delta=False,
     )
-    single_state, single_actions = petrel_dataset.project_petrel_features(
-        _canonical_arm_item(joint_count=7, single_right=True), output_dim=32, projection="pi05_aloha_32"
-    )
+    delta = petrel_dataset.reader._pose_delta_world_from_transformed_xyz_rotvec(current, target)  # noqa: SLF001
+    delta_rpy = petrel_dataset.reader._format_xyz_rotvec_pose(delta, "delta_xyz_rpy")  # noqa: SLF001
 
-    assert dual6_state.shape == dual7_state.shape == single_state.shape == (1, 14)
-    assert dual6_actions.shape == dual7_actions.shape == single_actions.shape == (3, 14)
-
-    # The first six joints and grippers are stable even when the source robot has a seventh joint.
-    torch.testing.assert_close(dual6_state, dual7_state)
-    torch.testing.assert_close(dual6_actions, dual7_actions)
-    expected = _canonical_arm_item(joint_count=6)
-    torch.testing.assert_close(dual6_state[0, 0:6], expected["observation.state"][0, 0:6])
-    assert dual6_state[0, 6] == expected["observation.state"][0, 16]
-    torch.testing.assert_close(dual6_state[0, 7:13], expected["observation.state"][0, 40:46])
-    assert dual6_state[0, 13] == expected["observation.state"][0, 56]
-
-    # A single right arm occupies ALOHA's right slots 7..13; left slots and padding stay zero.
-    torch.testing.assert_close(single_state[0, :7], torch.zeros(7))
-    torch.testing.assert_close(single_actions[0, :7], torch.zeros(7))
-    assert single_actions[0, 7] != 0
-    assert single_actions[0, 13] != 0
-
-
-def test_pi05_aloha_32_excludes_ee_and_seventh_joint_controls():
-    item = _canonical_arm_item(joint_count=7)
-    state, actions = petrel_dataset.project_petrel_features(item, output_dim=32, projection="pi05_aloha_32")
-
-    item["observation.state"][..., [6, 46]] = 9999
-    item["action"][..., [6, 46]] = 9999
-    item["observation.state"][..., 7:16] = 9999
-    item["observation.state"][..., 47:56] = 9999
-    item["action"][..., 7:13] = 9999
-    item["action"][..., 47:53] = 9999
-    state_with_ignored_values, actions_with_ignored_values = petrel_dataset.project_petrel_features(
-        item, output_dim=32, projection="pi05_aloha_32"
+    torch.testing.assert_close(
+        delta_rpy,
+        torch.tensor([[-2.0, -3.0, 1.0, 0.0, 0.0, 0.1]]),
+        atol=1e-5,
+        rtol=1e-5,
     )
 
-    torch.testing.assert_close(state_with_ignored_values, state)
-    torch.testing.assert_close(actions_with_ignored_values, actions)
 
+def test_absolute_ee_action_chunk_uses_initial_observation_as_delta_reference():
+    dataset = object.__new__(petrel_dataset.reader.PetrelLeRobotDataset)
+    dataset.name = "pose_reference"
+    dataset.canonical_adapter = {
+        "pose_input": "xyz_rpy",
+        "action_pose_semantics": "absolute_target",
+        "action_pose_output": "delta_xyz_rpy",
+    }
+    component = {
+        "state_key": "state_pose",
+        "action_key": "action_pose",
+        "raw_slice": [0, 6],
+    }
+    parquet = {
+        "state_pose": torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [1.5, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+        "action_pose": torch.tensor([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0], [2.0, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+    }
 
-def test_pi05_aloha_32_normalizes_14d_before_model_padding():
-    state, actions = petrel_dataset.project_petrel_features(
-        _canonical_arm_item(joint_count=6), output_dim=32, projection="pi05_aloha_32"
+    actions = dataset._canonical_pose_from_component(  # noqa: SLF001
+        parquet,
+        component,
+        [0, 1],
+        "action",
+        reference_indices=[0, 0],
     )
-    assert petrel_dataset.projected_feature_dim(32, "pi05_aloha_32") == 14
 
+    assert actions is not None
+    torch.testing.assert_close(actions[:, 0], torch.tensor([1.0, 2.0]))
+
+
+def test_grouped_norm_stats_select_sample_group_and_remove_selector():
+    group_a = normalize.NormStats(mean=np.zeros(2), std=np.ones(2), q01=np.zeros(2), q99=np.ones(2))
+    group_b = normalize.NormStats(mean=np.zeros(2), std=np.ones(2), q01=np.full(2, 10.0), q99=np.full(2, 20.0))
+    norm_stats = {
+        transforms.grouped_norm_key("state", "source/robot/task_a"): group_a,
+        transforms.grouped_norm_key("actions", "source/robot/task_a"): group_a,
+        transforms.grouped_norm_key("state", "source/robot/task_b"): group_b,
+        transforms.grouped_norm_key("actions", "source/robot/task_b"): group_b,
+    }
+    data = {
+        "state": np.asarray([15.0, 20.0]),
+        "actions": np.asarray([[10.0, 15.0]]),
+        "stats_group": "source/robot/task_b",
+    }
+
+    result = transforms.NormalizeByGroup(norm_stats, use_quantiles=True)(data)
+
+    np.testing.assert_allclose(result["state"], np.asarray([0.0, 1.0]), atol=1e-6)
+    np.testing.assert_allclose(result["actions"], np.asarray([[-1.0, 0.0]]), atol=1e-6)
+    assert "stats_group" not in result
+
+    fallback_data = {
+        "state": np.asarray([15.0, 20.0]),
+        "actions": np.asarray([[10.0, 15.0]]),
+        "stats_group": "source/robot/missing_task",
+        "stats_group_fallbacks": ("source/robot/task_b", "dataset/all"),
+    }
+    fallback_result = transforms.NormalizeByGroup(norm_stats, use_quantiles=True)(fallback_data)
+    np.testing.assert_allclose(fallback_result["state"], np.asarray([0.0, 1.0]), atol=1e-6)
+    assert "stats_group_fallbacks" not in fallback_result
+
+    selected = transforms.select_norm_stats(norm_stats, "source/robot/task_b")
+    assert selected == {"state": group_b, "actions": group_b}
+    with np.testing.assert_raises(ValueError):
+        transforms.select_norm_stats(norm_stats, None)
+
+
+def test_grouped_norm_restores_missing_control_slots_to_zero():
     stats = normalize.NormStats(
-        mean=np.zeros(14),
-        std=np.ones(14),
-        q01=np.zeros(14),
-        q99=np.ones(14),
+        mean=np.zeros(4),
+        std=np.ones(4),
+        q01=np.zeros(4),
+        q99=np.asarray([1.0, 0.0, 1.0, 0.0]),
     )
-    data = {"state": state[0].numpy(), "actions": actions.numpy()}
-    data = transforms.Normalize({"state": stats, "actions": stats}, use_quantiles=True)(data)
-    data = transforms.PadStatesAndActions(32)(data)
+    data = {
+        "state": np.asarray([0.5, 0.0, 0.5, 0.0]),
+        "actions": np.asarray([[0.5, 0.0, 0.5, 0.0]]),
+        "state_dim_is_pad": np.asarray([False, True, False, True]),
+        "actions_dim_is_pad": np.asarray([False, True, False, True]),
+        "stats_group": "profile/test",
+    }
+    norm_stats = {
+        transforms.grouped_norm_key("state", "profile/test"): stats,
+        transforms.grouped_norm_key("actions", "profile/test"): stats,
+    }
 
-    assert data["state"].shape == (32,)
-    assert data["actions"].shape == (3, 32)
-    np.testing.assert_array_equal(data["state"][14:], np.zeros(18))
-    np.testing.assert_array_equal(data["actions"][:, 14:], np.zeros((3, 18)))
+    result = transforms.NormalizeByGroup(norm_stats, use_quantiles=True)(data)
+
+    np.testing.assert_array_equal(result["state"][[1, 3]], np.zeros(2))
+    np.testing.assert_array_equal(result["actions"][:, [1, 3]], np.zeros((1, 2)))
+    assert "state_dim_is_pad" not in result
+    np.testing.assert_array_equal(result["actions_dim_is_pad"], np.asarray([False, True, False, True]))
 
 
-def test_petrel_s3_url_parser():
-    target = petrel_dataset.reader._parse_petrel_s3_url(  # noqa: SLF001
-        "manip:bucket/path/to/meta/info.json"
+def test_dataset_config_owns_cache_templates_and_three_level_norm_groups():
+    config = petrel_dataset.reader.read_openpi_petrel_config("configs/petrel/pi05_interna1.yaml")
+    profile = config["embodiments"]["a1_single_ee"]
+
+    assert "local_meta_dir_template" not in profile
+    assert "path_index_dir_template" not in profile
+    assert profile["stats_group_template"] == "profile/{dataset_id}/{robot_id}"
+    assert config["cache_templates"]["local_meta_dir"].endswith("data/petrel_cache/meta/{dataset_id}/{remote}")
+    assert config["cache_templates"]["path_index_dir"].endswith("data/petrel_cache/path_index/{dataset_id}/{remote}")
+
+    source = next(item for item in config["sources"] if item["name"] == "a1_articulation_franka")
+    assert source["stats_group_template"] is None
+
+    specs = petrel_dataset.reader._flatten_source_specs(config)  # noqa: SLF001
+    spec = next(item for item in specs if item.source_name == "a1_articulation_franka")
+    assert spec.local_meta_dir.endswith(f"data/petrel_cache/meta/intern_a1/{spec.remote_root}")
+    assert spec.path_index_dir.endswith(f"data/petrel_cache/path_index/intern_a1/{spec.remote_root}")
+    assert spec.stats_group == "profile/intern_a1/franka"
+    assert spec.stats_group_fallbacks == ("dataset/intern_a1",)
+
+    source["stats_group_template"] = "task/{dataset_id}/{source}/{name}"
+    task_specs = petrel_dataset.reader._flatten_source_specs(config)  # noqa: SLF001
+    task_spec = next(item for item in task_specs if item.source_name == "a1_articulation_franka")
+    assert task_spec.stats_group == f"task/intern_a1/a1_articulation_franka/{task_spec.name}"
+    assert task_spec.stats_group_fallbacks == (
+        "profile/intern_a1/franka",
+        "dataset/intern_a1",
     )
 
-    assert target.section == "manip"
-    assert target.bucket == "bucket"
-    assert target.key == "path/to/meta/info.json"
+
+def test_reader_exposes_only_local_file_client():
+    assert hasattr(petrel_dataset.reader, "LocalFileClient")
+    assert not hasattr(petrel_dataset.reader, "PetrelClient")
+    assert not hasattr(petrel_dataset.reader, "_parse_petrel_s3_url")
 
 
 def test_openpi_petrel_v1_schema_translation_and_local_backend(tmp_path):
@@ -418,16 +521,19 @@ control_profiles:
   single_arm:
     control_type: single_arm
     mapping:
-      layout: robot
       slots:
         right:
-          joint: {state_key: observation.state, action_key: action, target_slice: [40, 47]}
+          joint:
+            state_key: observation.state
+            action_key: action
+            raw_slice: [0, 7]
+            target_slot: right.joint
     fields:
       state: {keys: [observation.state]}
       action: {keys: [action]}
       video: {key: auto}
 format: v3
-root: example:s3://bucket/root
+root: .
 datasets:
   - name: task_a
     path: task_a
@@ -443,7 +549,7 @@ openpi:
   state_dim: 32
   action_dim: 32
   action_horizon: 16
-  control_projection: compact_valid
+  control_projection: mapped
   normalization: quantile
   images:
     size: [224, 224]
@@ -451,8 +557,6 @@ openpi:
     channels: rgb
     slots: [base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb]
 storage:
-  petrel_conf: ~/petreloss.conf
-  local_remote_prefix: example:s3://bucket/root
   parquet_cache_size: 2
   metadata_cache: cache/meta/{remote}
   path_index_cache: cache/{remote}
@@ -464,7 +568,19 @@ sampling:
 mixture:
   category_weights: {single: 1.0}
   distribute_category_weight_by_valid_windows: true
-source_control_space: {name: robot, dim: 80}
+source_control_space:
+  name: openpi
+  dim: 32
+  slots:
+    right:
+      joint:
+        indices: [7, 8, 9, 10, 11, 12, 27]
+  missing_policy: pad_and_mask
+  pose:
+    state: xyz_rpy
+    action: delta_xyz_rpy
+  action_semantics:
+    joint: absolute
 dataset_files:
   directory: datasets
   recursive: true
@@ -487,18 +603,14 @@ dataset_files:
     (local_dataset / "meta/info.json").write_text("{}", encoding="utf-8")
     payload_path = local_dataset / "payload.bin"
     payload_path.write_bytes(b"local-only")
-    local_config, local_specs = petrel_dataset.reader.load_dataset_specs(
-        config_path,
-        storage_backend="local",
-        local_root=str(local_root),
-    )
+    local_config, local_specs = petrel_dataset.reader.load_dataset_specs(config_path, local_root=str(local_root))
 
-    assert local_config["storage"]["backend"] == "local"
+    assert local_config["storage"]["local_root"] == str(local_root)
     assert local_specs[0].remote_root == str(local_dataset)
-    assert local_specs[0].storage_backend == "local"
+    assert local_specs[0].local_root == str(local_root)
     assert local_specs[0].format_version is None
-    assert "/local-" in local_specs[0].local_meta_dir
-    assert "/local-" in local_specs[0].path_index_dir
+    assert local_specs[0].local_meta_dir.endswith("cache/meta/task_a")
+    assert local_specs[0].path_index_dir.endswith("cache/task_a")
 
     dataset = object.__new__(petrel_dataset.reader.PetrelLeRobotDataset)
     dataset.spec = dataclasses.replace(local_specs[0], local_meta_dir=str(tmp_path / "meta_cache"))
@@ -529,7 +641,7 @@ openpi:
   state_dim: 32
   action_dim: 32
   action_horizon: 16
-  control_projection: compact_valid
+  control_projection: mapped
   normalization: quantile
   images:
     size: [224, 224]
@@ -547,34 +659,184 @@ dataset_files:
     assert contract["action_horizon"] == 16
 
 
-def test_pi05_petrel_yaml_expands_all_repository_datasets():
-    config, specs = petrel_dataset.reader.load_dataset_specs("configs/petrel/pi05_petrel.yaml")
-
-    assert config["dataset_id"] == "petrel_mixed"
-    assert len(specs) == 1785
-    assert all(spec.remote_root for spec in specs)
-    assert all(spec.modalities for spec in specs)
-    assert all(spec.canonical_adapter for spec in specs)
-    assert all(spec.dataset_weight > 0 for spec in specs)
-    assert all(spec.storage_backend == "sdk" for spec in specs)
-    assert {spec.source_name for spec in specs} >= {
-        "a1_articulation_franka",
-        "intern_m1",
-        "bridgev2",
-        "agibotworld",
-        "galaxea_no_mobile_torso",
-        "oxe_quat",
-    }
+def test_pi05_petrel_legacy_config_is_rejected_until_mapped_migration():
+    with pytest.raises(ValueError, match="control_projection must be 'mapped'"):
+        petrel_dataset.reader.read_openpi_petrel_config("configs/petrel/pi05_petrel.yaml")
 
 
 def test_pi05_interna1_yaml_only_expands_intern_a1():
     config, specs = petrel_dataset.reader.load_dataset_specs("configs/petrel/pi05_interna1.yaml")
 
     assert config["dataset_id"] == "intern_a1"
-    assert config["openpi"]["control_projection"] == "pi05_aloha_32"
+    assert config["openpi"]["control_projection"] == "mapped"
     assert config["dataset_weights"]["source_files"] == {"intern_a1": 1.0}
+    assert set(config["embodiments"]) == {"a1_single_ee", "a1_dual_ee", "a1_dual7_ee"}
     assert specs
+    assert {spec.stats_group for spec in specs} == {
+        "profile/intern_a1/franka",
+        "profile/intern_a1/lift2",
+        "profile/intern_a1/split_aloha",
+        "profile/intern_a1/acone",
+        "profile/intern_a1/genie1",
+    }
+    assert {spec.stats_group_fallbacks for spec in specs} == {("dataset/intern_a1",)}
     assert {source["_source_file"] for source in config["sources"]} == {"intern_a1"}
+
+    single_profile = config["embodiments"]["a1_single_ee"]["canonical_adapter"]
+    assert single_profile["slots"]["right"]["ee"]["state_key"] == "states.tcp_to_robot_pose"
+    assert single_profile["slots"]["right"]["joint"]["state_target_indices"] == [7, 8, 9, 10, 11, 12, 27]
+    assert single_profile["slots"]["right"]["ee"]["state_target_indices"] == [20, 21, 22, 23, 24, 25]
+
+    dual7_profile = config["embodiments"]["a1_dual7_ee"]["canonical_adapter"]
+    assert dual7_profile["slots"]["left"]["joint"]["state_target_indices"] == [0, 1, 2, 3, 4, 5, 26]
+    assert dual7_profile["slots"]["right"]["joint"]["state_target_indices"] == [7, 8, 9, 10, 11, 12, 27]
+
+    articulation = next(source for source in config["sources"] if source["name"] == "a1_articulation_franka")
+    assert articulation["adapter"] == "a1_single_ee"
+    assert articulation["canonical_adapter"]["frame_transform"]["world_from_source"] == "robot_to_opencv"
+    assert articulation["canonical_adapter"]["frame_transform"]["source_ee_from_canonical_ee"] == [
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0],
+    ]
+
+    articulation_spec = next(spec for spec in specs if spec.source_name == "a1_articulation_franka")
+    assert articulation_spec.canonical_adapter["slots"]["right"]["joint"]["state_key"] == "states.joint.position"
+    assert (
+        articulation_spec.canonical_adapter["frame_transform"] == articulation["canonical_adapter"]["frame_transform"]
+    )
+    assert articulation_spec.modalities["video"]["key_map"] == {
+        "images.rgb.head": "base_0_rgb",
+        "images.rgb.hand": "right_wrist_0_rgb",
+    }
+
+
+def test_interna1_camera_mapping_does_not_depend_on_video_key_order():
+    adapter = object.__new__(petrel_dataset.PetrelDataset)
+    adapter._camera_key_map = {}  # noqa: SLF001
+
+    franka = SimpleNamespace(
+        video_keys=["images.rgb.unmapped", "images.rgb.hand", "images.rgb.head"],
+        modalities={
+            "video": {
+                "key_map": {
+                    "images.rgb.head": "base_0_rgb",
+                    "images.rgb.hand": "right_wrist_0_rgb",
+                }
+            }
+        },
+    )
+    dual_arm = SimpleNamespace(
+        video_keys=["images.rgb.hand_right", "images.rgb.head", "images.rgb.hand_left"],
+        modalities={
+            "video": {
+                "key_map": {
+                    "images.rgb.head": "base_0_rgb",
+                    "images.rgb.hand_left": "left_wrist_0_rgb",
+                    "images.rgb.hand_right": "right_wrist_0_rgb",
+                }
+            }
+        },
+    )
+
+    assert adapter._camera_assignments(franka) == [  # noqa: SLF001
+        ("images.rgb.hand", "right_wrist_0_rgb"),
+        ("images.rgb.head", "base_0_rgb"),
+    ]
+    assert adapter._camera_assignments(dual_arm) == [  # noqa: SLF001
+        ("images.rgb.hand_right", "right_wrist_0_rgb"),
+        ("images.rgb.head", "base_0_rgb"),
+        ("images.rgb.hand_left", "left_wrist_0_rgb"),
+    ]
+
+
+def test_interna1_groups_use_registered_control_profiles():
+    group_dir = pathlib.Path("configs/petrel/dataset_groups/intern_a1")
+    group_payloads = [yaml.safe_load(path.read_text(encoding="utf-8")) for path in group_dir.glob("*.yaml")]
+
+    assert len(group_payloads) == 44
+    assert all("control_profiles" not in payload for payload in group_payloads)
+    assert {payload["profile"] for payload in group_payloads} == {
+        "a1_single_ee",
+        "a1_dual_ee",
+        "a1_dual7_ee",
+    }
+
+
+def test_pi05_abc130k_config_and_manifest():
+    dataset_id, contract = petrel_dataset.reader.read_openpi_petrel_metadata("configs/petrel/pi05_abc130k.yaml")
+    translated = petrel_dataset.reader.read_openpi_petrel_config("configs/petrel/pi05_abc130k.yaml")
+
+    assert dataset_id == "abc130k"
+    assert contract["control_projection"] == "mapped"
+    assert translated["source_control_space"]["dim"] == 32
+    specs = petrel_dataset.reader._flatten_source_specs(translated)  # noqa: SLF001
+    assert {spec.stats_group for spec in specs} == {"dataset/abc130k"}
+    assert {spec.stats_group_fallbacks for spec in specs} == {()}
+    assert all("data/petrel_cache/meta/abc130k/" in str(spec.local_meta_dir) for spec in specs)
+    assert all("data/petrel_cache/path_index/abc130k/" in str(spec.path_index_dir) for spec in specs)
+    adapter = translated["embodiments"]["abc130k_3cam"]["canonical_adapter"]
+    assert adapter["slots"]["left"]["joint"]["state_target_indices"] == [0, 1, 2, 3, 4, 5]
+    assert adapter["slots"]["right"]["joint"]["state_target_indices"] == [7, 8, 9, 10, 11, 12]
+    assert adapter["slots"]["left"]["ee"]["state_target_indices"] == [14, 15, 16, 17, 18, 19]
+    assert adapter["slots"]["right"]["ee"]["action_target_indices"] == [20, 21, 22, 23, 24, 25]
+    assert adapter["delta_from_state_indices"] == [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]
+    manifests = {
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in pathlib.Path("configs/petrel/dataset_groups/abc130k").glob("*.yaml")
+    }
+    assert manifests["abc130k.yaml"]["profile"] == "abc130k_3cam"
+    assert manifests["abc130k_4cam.yaml"]["profile"] == "abc130k_4cam_top_left"
+    assert len(manifests["abc130k.yaml"]["datasets"]) == 398
+    assert len(manifests["abc130k_4cam.yaml"]["datasets"]) == 87
+
+    datasets = [dataset for manifest in manifests.values() for dataset in manifest["datasets"]]
+    assert len(datasets) == 485
+    assert len({dataset["name"] for dataset in datasets}) == 485
+    assert len({dataset["path"] for dataset in datasets}) == 485
+
+    profile_registry = yaml.safe_load(
+        pathlib.Path("configs/petrel/control_profiles/abc130k.yaml").read_text(encoding="utf-8")
+    )
+    profiles = profile_registry["control_profiles"]
+    assert profiles["abc130k_3cam"]["fields"]["video"]["key_map"]["observation.images.top_camera"] == ("base_0_rgb")
+    assert profiles["abc130k_4cam_top_left"]["fields"]["video"]["key_map"] == {
+        "observation.images.top_left_camera": "base_0_rgb",
+        "observation.images.left_wrist_camera": "left_wrist_0_rgb",
+        "observation.images.right_wrist_camera": "right_wrist_0_rgb",
+    }
+    assert profiles["abc130k_4cam_top_right"]["fields"]["video"]["key_map"] == {
+        "observation.images.top_right_camera": "base_0_rgb",
+        "observation.images.left_wrist_camera": "left_wrist_0_rgb",
+        "observation.images.right_wrist_camera": "right_wrist_0_rgb",
+    }
+
+
+def test_abc130k_camera_mapping_uses_profile_selected_stereo_top_view():
+    dataset = SimpleNamespace(
+        video_keys=[
+            "observation.images.top_right_camera",
+            "observation.images.left_wrist_camera",
+            "observation.images.right_wrist_camera",
+        ],
+        modalities={
+            "video": {
+                "key_map": {
+                    "observation.images.top_right_camera": "base_0_rgb",
+                    "observation.images.left_wrist_camera": "left_wrist_0_rgb",
+                    "observation.images.right_wrist_camera": "right_wrist_0_rgb",
+                }
+            }
+        },
+    )
+    adapter = object.__new__(petrel_dataset.PetrelDataset)
+    adapter._camera_key_map = {}  # noqa: SLF001
+
+    assert adapter._camera_assignments(dataset) == [  # noqa: SLF001
+        ("observation.images.top_right_camera", "base_0_rgb"),
+        ("observation.images.left_wrist_camera", "left_wrist_0_rgb"),
+        ("observation.images.right_wrist_camera", "right_wrist_0_rgb"),
+    ]
 
 
 def test_pi05_petrel_data_config_create_uses_yaml_contract(tmp_path):
@@ -585,13 +847,8 @@ def test_pi05_petrel_data_config_create_uses_yaml_contract(tmp_path):
         train_config.data,
         model_transforms=training_config.IdentityTransformFactory(),
     )
-    data_config = data_factory.create(tmp_path, train_config.model)
-
-    assert data_config.repo_id == "petrel_mixed"
-    assert data_config.petrel is not None
-    assert train_config.model.action_dim == 32
-    assert train_config.model.action_horizon == 16
-    assert tmp_path / data_config.repo_id == tmp_path / "petrel_mixed"
+    with pytest.raises(ValueError, match="control_projection must be 'mapped'"):
+        data_factory.create(tmp_path, train_config.model)
 
 
 def test_compute_norm_stats_petrel_config_does_not_build_tokenizer(monkeypatch):

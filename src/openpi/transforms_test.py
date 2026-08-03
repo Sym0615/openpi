@@ -67,6 +67,19 @@ def test_make_bool_mask():
     assert _transforms.make_bool_mask(2, 0, 2) == (True, True, True, True)
 
 
+def test_pad_states_and_actions_marks_new_action_dimensions_as_padding():
+    data = {
+        "state": np.asarray([1.0, 2.0]),
+        "actions": np.asarray([[3.0, 4.0]]),
+        "actions_dim_is_pad": np.asarray([False, True]),
+    }
+
+    result = _transforms.PadStatesAndActions(4)(data)
+
+    np.testing.assert_array_equal(result["actions"], np.asarray([[3.0, 4.0, 0.0, 0.0]]))
+    np.testing.assert_array_equal(result["actions_dim_is_pad"], np.asarray([False, True, True, True]))
+
+
 def test_tokenize_prompt():
     tokenizer = _tokenizer.PaligemmaTokenizer(max_len=12)
     transform = _transforms.TokenizePrompt(tokenizer)

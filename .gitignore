@@ -1,12 +1,14 @@
 # Local data and training artifacts.
 # These files are machine-local state and should not be committed.
 data/
+assets/
 checkpoints/
 wandb/
 logs/
 jobs/
 runs/
 pi05_interna1/
+pi05_abc130k/
 docs/
 TODO.md
 

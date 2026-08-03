@@ -59,6 +59,9 @@ Usage (Kubernetes task command):
   # Normal training (default):
   OPENPI_PROFILE=0 OPENPI_RUN_ID=<run_id> bash scripts/train_distributed.sh
 
+  # Select a training config explicitly (hyphen and underscore spellings are accepted):
+  OPENPI_RUN_ID=<run_id> bash scripts/train_distributed.sh --config-name=pi05_abc130k
+
   # Short 16-GPU profiling run:
   OPENPI_PROFILE=1 OPENPI_RUN_ID=<run_id> OPENPI_TRAIN_STEPS=120 bash scripts/train_distributed.sh
 
@@ -86,7 +89,7 @@ GPU count in the Kubernetes task specification. The same command is executed
 on every node with node-specific WORLD_SIZE and RANK values.
 
 Optional training variables:
-  OPENPI_RUN_ID, OPENPI_LOCAL_BATCH_SIZE, OPENPI_TRAIN_STEPS, OPENPI_NUM_WORKERS,
+  OPENPI_CONFIG_NAME, OPENPI_RUN_ID, OPENPI_LOCAL_BATCH_SIZE, OPENPI_TRAIN_STEPS, OPENPI_NUM_WORKERS,
   OPENPI_WORKER_BATCH_SIZE, OPENPI_PREFETCH_FACTOR, OPENPI_DATALOADER_IN_ORDER,
   OPENPI_PIN_MEMORY, OPENPI_DATALOADER_PREWARM,
   OPENPI_LOCAL_VIDEO_PATH_DECODE,
@@ -103,19 +106,40 @@ Profiling defaults to 120 steps; normal training defaults to 10000 steps.
 OPENPI_TORCH_TRACE is only valid when profiling is enabled.
 
 Checkpoints and profiling outputs share this timestamped run directory:
-  <OPENPI_RUN_ROOT>/pi05_interna1/<OPENPI_RUN_ID>_<UTC start time>/
+  <OPENPI_RUN_ROOT>/<OPENPI_CONFIG_NAME>/<OPENPI_RUN_ID>_<UTC start time>/
 EOF
 }
 
-if [[ $# -eq 1 && ( "$*" == "-h" || "$*" == "--help" ) ]]; then
-  usage
-  exit 0
-fi
-if [[ $# -ne 0 ]]; then
-  echo "This launcher does not accept positional topology arguments." >&2
-  usage >&2
-  exit 2
-fi
+CLI_CONFIG_NAME=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --config-name|--config_name)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "$1 requires a non-empty value." >&2
+        exit 2
+      fi
+      CLI_CONFIG_NAME="$2"
+      shift 2
+      ;;
+    --config-name=*|--config_name=*)
+      CLI_CONFIG_NAME="${1#*=}"
+      if [[ -z "${CLI_CONFIG_NAME}" ]]; then
+        echo "${1%%=*} requires a non-empty value." >&2
+        exit 2
+      fi
+      shift
+      ;;
+    *)
+      echo "Unsupported launcher argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 : "${WORLD_SIZE:?Kubernetes did not inject node count in WORLD_SIZE}"
 : "${MASTER_ADDR:?Kubernetes did not inject MASTER_ADDR}"
@@ -125,6 +149,7 @@ NUM_NODES="${WORLD_SIZE}"
 NODE_RANK="${BOOTSTRAP_NODE_RANK}"
 GPUS_PER_NODE="${OPENPI_GPUS_PER_NODE:-8}"
 LOCAL_BATCH_SIZE="${OPENPI_LOCAL_BATCH_SIZE:-64}"
+export OPENPI_CONFIG_NAME="${CLI_CONFIG_NAME:-${OPENPI_CONFIG_NAME:-pi05_interna1}}"
 
 cd "${OPENPI_WORKDIR}"
 if [[ -n "${OPENPI_PYTHON:-}" ]]; then
@@ -268,8 +293,8 @@ echo "[topology] nnodes=${NUM_NODES} gpus_per_node=${GPUS_PER_NODE} node_rank=${
 echo "[topology] master=${MASTER_ADDR}:${MASTER_PORT}"
 echo "[topology] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 echo "[train] global_world_size=${GLOBAL_WORLD_SIZE} global_batch_size=${GLOBAL_BATCH_SIZE} local_batch_size=${LOCAL_BATCH_SIZE}"
-echo "[train] run_id=${OPENPI_RUN_ID} workers_per_rank=${OPENPI_NUM_WORKERS} checkpoint_root=${OPENPI_RUN_ROOT}"
-echo "[train] run_dir_template=${OPENPI_RUN_ROOT}/pi05_interna1/${OPENPI_RUN_ID}_<UTC start time>"
+echo "[train] config_name=${OPENPI_CONFIG_NAME} run_id=${OPENPI_RUN_ID} workers_per_rank=${OPENPI_NUM_WORKERS} checkpoint_root=${OPENPI_RUN_ROOT}"
+echo "[train] run_dir_template=${OPENPI_RUN_ROOT}/${OPENPI_CONFIG_NAME}/${OPENPI_RUN_ID}_<UTC start time>"
 echo "[train] mode=${TRAIN_MODE} steps=${OPENPI_TRAIN_STEPS} profiling=${OPENPI_PROFILE} torch_trace=${OPENPI_TORCH_TRACE}"
 echo "[logging] torchrun_log_dir=${TORCHRUN_LOG_DIR} tee=stdout+stderr all_ranks"
 echo "[logging] TORCH_DISTRIBUTED_DEBUG=${TORCH_DISTRIBUTED_DEBUG} NCCL_DEBUG=${NCCL_DEBUG} NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS}"

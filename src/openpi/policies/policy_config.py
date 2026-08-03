@@ -21,6 +21,7 @@ def create_trained_policy(
     sample_kwargs: dict[str, Any] | None = None,
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
+    stats_group: str | None = None,
     pytorch_device: str | None = None,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
@@ -35,6 +36,7 @@ def create_trained_policy(
             data if it doesn't already exist.
         norm_stats: The norm stats to use for the policy. If not provided, the norm stats will be loaded
             from the checkpoint directory.
+        stats_group: Group to select when the checkpoint contains task/embodiment-specific norm stats.
         pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda", "cuda:0").
                       If None and is_pytorch=True, will use "cuda" if available, otherwise "cpu".
 
@@ -62,6 +64,7 @@ def create_trained_policy(
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
+    norm_stats = transforms.select_norm_stats(norm_stats, stats_group)
 
     # Determine the device to use for PyTorch models
     if is_pytorch and pytorch_device is None:

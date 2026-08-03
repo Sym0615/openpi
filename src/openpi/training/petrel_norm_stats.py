@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import dataclasses
+import hashlib
 import heapq
 import math
 import multiprocessing as mp
@@ -13,6 +14,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from openpi import transforms
 from openpi.shared import normalize
 from openpi.training import petrel_dataset
 from openpi.training import petrel_lerobot_reader as reader
@@ -81,11 +83,37 @@ class _Accumulator:
 
 
 @dataclasses.dataclass
-class _WorkerStats:
+class _GroupStats:
     state: _Accumulator
     actions: _Accumulator
     windows: int = 0
+
+
+@dataclasses.dataclass
+class _WorkerStats:
+    groups: dict[str, _GroupStats] = dataclasses.field(default_factory=dict)
+    windows: int = 0
     skipped_windows: int = 0
+
+
+def _group_seed(seed: int, stats_group: str, offset: int) -> int:
+    digest = hashlib.sha256(stats_group.encode()).digest()
+    return int(seed) + int.from_bytes(digest[:4], "little") + int(offset)
+
+
+def _new_group_stats(dim: int, reservoir_rows: int, seed: int, stats_group: str) -> _GroupStats:
+    return _GroupStats(
+        state=_Accumulator(dim, reservoir_rows, _group_seed(seed, stats_group, 11)),
+        actions=_Accumulator(dim, reservoir_rows, _group_seed(seed, stats_group, 23)),
+    )
+
+
+def _spec_stats_groups(spec: Any) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            [str(spec.stats_group or spec.name), *(str(group) for group in spec.stats_group_fallbacks)]
+        )
+    )
 
 
 def _make_dataset(spec: Any, raw_config: dict[str, Any], action_horizon: int) -> Any:
@@ -118,21 +146,71 @@ def _select_episode_blocks(
     rng = np.random.default_rng(int(seed))
     order = rng.permutation(len(blocks))
     selected_by_unit: dict[int, dict[str, Any]] = {}
+    reserved_ranges: dict[int, tuple[int, int]] = {}
     remaining = int(target)
-    for block_index in order:
-        unit_index, offset, length = blocks[int(block_index)]
-        take = min(int(length), remaining)
-        if take < length:
-            offset += int(rng.integers(0, length - take + 1))
+
+    # Guarantee that bounded smoke/stat runs cover every normalization group.
+    # A unit can cover both its task/profile group and one or more fallbacks.
+    uncovered_groups = {
+        str(group) for unit in units for group in unit.get("stats_groups", ())
+    }
+    for raw_block_index in order:
+        if not uncovered_groups:
+            break
+        block_index = int(raw_block_index)
+        unit_index, offset, length = blocks[block_index]
+        covered = uncovered_groups.intersection(str(group) for group in units[unit_index].get("stats_groups", ()))
+        if not covered:
+            continue
+        reserve_count = min(2, int(length), remaining)
+        if reserve_count < 2:
+            raise ValueError(
+                f"max_frames={target} is too small to collect two rows for normalization groups "
+                f"{sorted(uncovered_groups)}."
+            )
+        selected_offset = int(offset + rng.integers(0, length - reserve_count + 1))
         selected = selected_by_unit.setdefault(
             unit_index,
             {**units[unit_index], "quota": 0, "blocks": []},
         )
-        selected["blocks"].append((int(offset), int(take)))
-        selected["quota"] += int(take)
-        remaining -= int(take)
+        selected["blocks"].append((selected_offset, reserve_count))
+        selected["quota"] += reserve_count
+        reserved_ranges[block_index] = (selected_offset, reserve_count)
+        remaining -= reserve_count
+        uncovered_groups.difference_update(covered)
+    if uncovered_groups:
+        raise RuntimeError(f"Could not find normalization windows for groups {sorted(uncovered_groups)}.")
+
+    for raw_block_index in order:
         if remaining <= 0:
             break
+        block_index = int(raw_block_index)
+        unit_index, offset, length = blocks[block_index]
+        reserved = reserved_ranges.get(block_index)
+        segments = [(int(offset), int(length))]
+        if reserved is not None:
+            reserved_offset, reserved_length = reserved
+            before = reserved_offset - int(offset)
+            after = int(offset) + int(length) - reserved_offset - reserved_length
+            segments = []
+            if before > 0:
+                segments.append((int(offset), before))
+            if after > 0:
+                segments.append((reserved_offset + reserved_length, after))
+        for raw_segment_offset, segment_length in segments:
+            if remaining <= 0:
+                break
+            segment_offset = int(raw_segment_offset)
+            take = min(int(segment_length), remaining)
+            if take < segment_length:
+                segment_offset += int(rng.integers(0, segment_length - take + 1))
+            selected = selected_by_unit.setdefault(
+                unit_index,
+                {**units[unit_index], "quota": 0, "blocks": []},
+            )
+            selected["blocks"].append((int(segment_offset), int(take)))
+            selected["quota"] += int(take)
+            remaining -= int(take)
     if remaining != 0:
         raise RuntimeError(f"Episode block selection left {remaining} windows unallocated.")
     return list(selected_by_unit.values())
@@ -164,6 +242,7 @@ def build_episode_plan(
                     "episode_index": int(dataset.trajectory_ids[int(trajectory_pos)]),
                     "windows": windows,
                     "quota": windows,
+                    "stats_groups": _spec_stats_groups(spec),
                 }
             )
         if (spec_index + 1) % 100 == 0 or spec_index + 1 == len(specs):
@@ -236,13 +315,9 @@ def _worker(payload: dict[str, Any]) -> _WorkerStats:
     torch.set_num_threads(1)
     worker_id = int(payload["worker_id"])
     output_dim = int(payload["output_dim"])
-    projection = str(payload["raw_config"]["openpi"].get("control_projection", "compact_valid"))
-    stats_dim = petrel_dataset.projected_feature_dim(output_dim, projection)
+    stats_dim = output_dim
     reservoir_rows = int(payload["reservoir_rows"])
-    stats = _WorkerStats(
-        state=_Accumulator(stats_dim, reservoir_rows, int(payload["seed"]) + worker_id * 1009 + 11),
-        actions=_Accumulator(stats_dim, reservoir_rows, int(payload["seed"]) + worker_id * 1009 + 23),
-    )
+    stats = _WorkerStats()
     raw_config = payload["raw_config"]
     specs = payload["specs"]
     action_horizon = int(payload["action_horizon"])
@@ -255,6 +330,19 @@ def _worker(payload: dict[str, Any]) -> _WorkerStats:
     started = time.perf_counter()
     for spec_index, units in sorted(by_spec.items()):
         dataset = _make_dataset(specs[spec_index], raw_config, action_horizon)
+        stats_groups = _spec_stats_groups(specs[spec_index])
+        group_accumulators = [
+            stats.groups.setdefault(
+                stats_group,
+                _new_group_stats(
+                    stats_dim,
+                    reservoir_rows,
+                    int(payload["seed"]) + worker_id * 1009,
+                    stats_group,
+                ),
+            )
+            for stats_group in stats_groups
+        ]
         for unit in units:
             try:
                 starts = _valid_start_indices(dataset, unit, allow_padding=allow_padding)
@@ -269,11 +357,13 @@ def _worker(payload: dict[str, Any]) -> _WorkerStats:
                     state, actions = petrel_dataset.project_petrel_features(
                         item,
                         output_dim,
-                        projection=projection,
                     )
-                    stats.state.update(state[:, 0, :])
-                    stats.actions.update(actions)
-                    stats.windows += int(item["_stats_num_samples"])
+                    windows = int(item["_stats_num_samples"])
+                    for group_stats in group_accumulators:
+                        group_stats.state.update(state[:, 0, :])
+                        group_stats.actions.update(actions)
+                        group_stats.windows += windows
+                    stats.windows += windows
             except Exception as exc:
                 stats.skipped_windows += int(unit["quota"])
                 print(
@@ -300,16 +390,9 @@ def compute_fast_petrel_norm_stats(
     episode_batch_size: int,
     reservoir_rows: int,
     seed: int = 42,
-    conf_path: str | None = None,
-    storage_backend: str | None = None,
     local_root: str | None = None,
 ) -> dict[str, normalize.NormStats]:
-    raw_config, specs = reader.load_dataset_specs(
-        dataset_config,
-        conf_path,
-        storage_backend=storage_backend,
-        local_root=local_root,
-    )
+    raw_config, specs = reader.load_dataset_specs(dataset_config, local_root=local_root)
     units, _, selected_windows = build_episode_plan(
         raw_config,
         specs,
@@ -320,7 +403,8 @@ def compute_fast_petrel_norm_stats(
     )
     worker_count = min(max(1, int(num_workers)), len(units))
     shards = _split_plan(units, worker_count)
-    per_worker_reservoir = max(1024, math.ceil(int(reservoir_rows) * 2 / len(shards)))
+    expected_groups = sorted({group for spec in specs for group in _spec_stats_groups(spec)})
+    per_group_reservoir = max(1024, math.ceil(int(reservoir_rows) / len(expected_groups)))
     payloads = [
         {
             "worker_id": worker_id,
@@ -330,16 +414,17 @@ def compute_fast_petrel_norm_stats(
             "action_horizon": int(action_horizon),
             "output_dim": int(output_dim),
             "episode_batch_size": int(episode_batch_size),
-            "reservoir_rows": per_worker_reservoir,
+            "reservoir_rows": per_group_reservoir,
             "seed": int(seed),
         }
         for worker_id, shard in enumerate(shards)
     ]
-    projection = str(raw_config["openpi"].get("control_projection", "compact_valid"))
-    stats_dim = petrel_dataset.projected_feature_dim(output_dim, projection)
+    stats_dim = output_dim
     merged = _WorkerStats(
-        state=_Accumulator(stats_dim, int(reservoir_rows), int(seed) + 101),
-        actions=_Accumulator(stats_dim, int(reservoir_rows), int(seed) + 211),
+        groups={
+            group: _new_group_stats(stats_dim, per_group_reservoir, int(seed) + 100_003, group)
+            for group in expected_groups
+        }
     )
     started = time.perf_counter()
     if len(payloads) == 1:
@@ -349,8 +434,11 @@ def compute_fast_petrel_norm_stats(
         with context.Pool(processes=len(payloads)) as pool:
             results = list(pool.imap_unordered(_worker, payloads))
     for partial in results:
-        merged.state.merge(partial.state)
-        merged.actions.merge(partial.actions)
+        for group, partial_group in partial.groups.items():
+            merged_group = merged.groups[group]
+            merged_group.state.merge(partial_group.state)
+            merged_group.actions.merge(partial_group.actions)
+            merged_group.windows += int(partial_group.windows)
         merged.windows += int(partial.windows)
         merged.skipped_windows += int(partial.skipped_windows)
     print(
@@ -360,7 +448,19 @@ def compute_fast_petrel_norm_stats(
     )
     if merged.windows <= 0:
         raise RuntimeError("Fast Petrel norm stats processed no windows.")
-    return {
-        "state": merged.state.finalize(),
-        "actions": merged.actions.finalize(),
-    }
+    missing_groups = [group for group, group_stats in merged.groups.items() if group_stats.windows <= 0]
+    if missing_groups:
+        preview = ", ".join(missing_groups[:5])
+        raise RuntimeError(
+            f"Norm sampling did not cover {len(missing_groups)} stats groups; first missing groups: {preview}. "
+            "Increase max_frames or compute all windows."
+        )
+    output: dict[str, normalize.NormStats] = {}
+    for group, group_stats in merged.groups.items():
+        output[transforms.grouped_norm_key("state", group)] = group_stats.state.finalize()
+        output[transforms.grouped_norm_key("actions", group)] = group_stats.actions.finalize()
+    print(
+        f"[petrel-fast] stats_groups={len(merged.groups)} reservoir_rows_per_group={per_group_reservoir}",
+        flush=True,
+    )
+    return output

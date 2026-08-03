@@ -49,6 +49,7 @@ import wandb
 import openpi.models.pi0_config
 import openpi.models_pytorch.pi0_pytorch
 import openpi.shared.normalize as _normalize
+from openpi.training import action_loss_metrics as _action_loss_metrics
 from openpi.training import profiling as _profiling
 import openpi.training.config as _config
 import openpi.training.data_loader as _data
@@ -198,9 +199,7 @@ def checkpoint_due(global_step: int, config: _config.TrainConfig) -> bool:
     return (global_step > 0 and global_step % config.save_interval == 0) or global_step == config.num_train_steps
 
 
-def resolve_timestamped_run_config(
-    config: _config.TrainConfig, *, use_ddp: bool, rank: int
-) -> _config.TrainConfig:
+def resolve_timestamped_run_config(config: _config.TrainConfig, *, use_ddp: bool, rank: int) -> _config.TrainConfig:
     """Resolve one shared <run_id>_<UTC time> directory before any output is created."""
     if os.environ.get("OPENPI_TIMESTAMPED_RUN_DIR") != "1":
         return config
@@ -276,9 +275,7 @@ def aggregate_profile_values(
         result[f"{key}_avg"] = sums[index].item() / world_size
         result[f"{key}_max"] = maxima[index].item()
     throughput_index = len(keys) - 1
-    result["samples_per_second_effective"] = (
-        local_batch_size * world_size / max(result["step_ms_max"] / 1000.0, 1e-9)
-    )
+    result["samples_per_second_effective"] = local_batch_size * world_size / max(result["step_ms_max"] / 1000.0, 1e-9)
     result["samples_per_second_sum_rank_rates"] = sums[throughput_index].item()
     result["samples_per_second_avg_per_rank"] = sums[throughput_index].item() / world_size
     result["samples_per_second_min_per_rank"] = minima[throughput_index].item()
@@ -286,9 +283,7 @@ def aggregate_profile_values(
     return result
 
 
-def aggregate_gpu_values(
-    local_values: dict[str, float], *, device: torch.device, use_ddp: bool
-) -> dict[str, float]:
+def aggregate_gpu_values(local_values: dict[str, float], *, device: torch.device, use_ddp: bool) -> dict[str, float]:
     """Aggregate one GPU monitor summary from every rank."""
     keys = (
         "gpu_util_avg",
@@ -306,9 +301,7 @@ def aggregate_gpu_values(
     )
     sums = values.clone()
     maxima = values.clone()
-    util_min = torch.tensor(
-        float(local_values.get("gpu_util_avg", float("inf"))), dtype=torch.float64, device=device
-    )
+    util_min = torch.tensor(float(local_values.get("gpu_util_avg", float("inf"))), dtype=torch.float64, device=device)
     if use_ddp:
         dist.all_reduce(sums, op=dist.ReduceOp.SUM)
         dist.all_reduce(maxima, op=dist.ReduceOp.MAX)
@@ -565,8 +558,7 @@ def _train_loop(config: _config.TrainConfig):
                     if latest_step is not None:
                         resuming = True
                         logging.info(
-                            f"Resuming from experiment checkpoint directory: {exp_checkpoint_dir} "
-                            f"at step {latest_step}"
+                            f"Resuming from experiment checkpoint directory: {exp_checkpoint_dir} at step {latest_step}"
                         )
                     else:
                         raise FileNotFoundError(f"No valid checkpoints found in {exp_checkpoint_dir} for resume")
@@ -778,6 +770,8 @@ def _train_loop(config: _config.TrainConfig):
     model.train()
     start_time = time.time()
     infos = []  # Collect stats over log interval
+    action_loss_metric_names: tuple[str, ...] | None = None
+    action_loss_accumulator: torch.Tensor | None = None
     if is_main:
         logging.info(
             f"Running on: {platform.node()} | world_size={torch.distributed.get_world_size() if use_ddp else 1}"
@@ -862,6 +856,17 @@ def _train_loop(config: _config.TrainConfig):
         elif not isinstance(losses, torch.Tensor):
             losses = torch.tensor(losses, device=device, dtype=torch.float32)
         loss = losses.mean()
+        step_metric_names, step_action_loss_stats = _action_loss_metrics.action_loss_sums_and_counts(
+            losses,
+            observation.actions_dim_is_pad,
+        )
+        if action_loss_metric_names is None:
+            action_loss_metric_names = step_metric_names
+            action_loss_accumulator = torch.zeros_like(step_action_loss_stats)
+        elif action_loss_metric_names != step_metric_names:
+            raise RuntimeError("Action loss metric layout changed during training.")
+        assert action_loss_accumulator is not None
+        action_loss_accumulator.add_(step_action_loss_stats)
         phase_cpu_ms["forward"] = end_cuda_phase("forward", phase_started, cuda_events)
 
         phase_started = start_cuda_phase(
@@ -914,7 +919,23 @@ def _train_loop(config: _config.TrainConfig):
             if gpu_monitor is not None:
                 gpu_monitor.summary(reset=True)
             infos = []
+            action_loss_accumulator = None
+            action_loss_metric_names = None
             start_time = time.time()
+
+        action_loss_values: dict[str, float] = {}
+        if global_step % logging_interval == 0 and action_loss_accumulator is not None:
+            reduced_action_loss_stats = action_loss_accumulator.clone()
+            if use_ddp:
+                dist.all_reduce(reduced_action_loss_stats, op=dist.ReduceOp.SUM)
+            if is_main:
+                assert action_loss_metric_names is not None
+                action_loss_values = _action_loss_metrics.action_loss_values(
+                    action_loss_metric_names,
+                    reduced_action_loss_stats,
+                )
+            action_loss_accumulator = None
+            action_loss_metric_names = None
 
         if infos and (global_step % logging_interval == 0):
             elapsed = time.time() - start_time
@@ -929,6 +950,32 @@ def _train_loop(config: _config.TrainConfig):
                     if avg_grad_norm is not None
                     else f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} time={elapsed:.1f}s"
                 )
+                component_names = ("joint", "gripper", "ee", "padding")
+                component_values = " ".join(
+                    f"{name}={action_loss_values[f'mse/{name}']:.4f}"
+                    f"(contrib={action_loss_values[f'contribution/{name}']:.4f},"
+                    f"share={action_loss_values[f'share/{name}']:.1%})"
+                    for name in component_names
+                    if f"mse/{name}" in action_loss_values and f"share/{name}" in action_loss_values
+                )
+                logging.info(
+                    "action_loss step=%d global=%.4f active=%.4f %s",
+                    global_step,
+                    action_loss_values.get("mse/total", float("nan")),
+                    action_loss_values.get("mse/active", float("nan")),
+                    component_values,
+                )
+                dimension_values = [
+                    f"d{dim:02d}={action_loss_values[f'mse/dim_{dim:02d}']:.4f}"
+                    for dim in range(losses.shape[-1])
+                    if f"mse/dim_{dim:02d}" in action_loss_values
+                ]
+                for offset in range(0, len(dimension_values), 16):
+                    logging.info(
+                        "action_loss_dims step=%d %s",
+                        global_step,
+                        " ".join(dimension_values[offset : offset + 16]),
+                    )
 
             if config.profiling_enabled and global_step >= config.profiling_warmup_steps:
                 profile_keys = (
@@ -1026,6 +1073,7 @@ def _train_loop(config: _config.TrainConfig):
                 }
                 if avg_grad_norm is not None:
                     log_payload["grad_norm"] = avg_grad_norm
+                log_payload.update({f"action_loss/{key}": value for key, value in action_loss_values.items()})
                 wandb.log(log_payload, step=global_step)
 
             start_time = time.time()
@@ -1056,7 +1104,6 @@ def _train_loop(config: _config.TrainConfig):
     # Finish wandb run
     if is_main and config.wandb_enabled:
         wandb.finish()
-
 
 
 def train_loop(config: _config.TrainConfig):

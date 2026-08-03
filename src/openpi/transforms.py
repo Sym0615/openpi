@@ -145,6 +145,120 @@ class Normalize(DataTransformFn):
         return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
 
 
+_GROUPED_NORM_SEPARATOR = "::"
+
+
+def grouped_norm_key(data_key: str, stats_group: str) -> str:
+    return f"{data_key}{_GROUPED_NORM_SEPARATOR}{stats_group}"
+
+
+def select_norm_stats(norm_stats: dict[str, NormStats] | None, stats_group: str | None) -> dict[str, NormStats] | None:
+    """Select ordinary state/action stats from a grouped normalization asset."""
+    if norm_stats is None or not any(_GROUPED_NORM_SEPARATOR in key for key in norm_stats):
+        return norm_stats
+    if not stats_group:
+        groups = sorted({key.split(_GROUPED_NORM_SEPARATOR, 1)[1] for key in norm_stats})
+        preview = ", ".join(groups[:5])
+        raise ValueError(
+            "This checkpoint uses grouped norm stats; pass stats_group to create_trained_policy. "
+            f"Available groups include: {preview}"
+        )
+    selected: dict[str, NormStats] = {}
+    for data_key in ("state", "actions"):
+        stats_key = grouped_norm_key(data_key, stats_group)
+        if stats_key not in norm_stats:
+            raise KeyError(f"Norm stats missing key {stats_key!r}.")
+        selected[data_key] = norm_stats[stats_key]
+    return selected
+
+
+@dataclasses.dataclass(frozen=True)
+class NormalizeByGroup(DataTransformFn):
+    """Normalize state/actions using the stats group attached to a dataset sample.
+
+    Old assets containing only ``state`` and ``actions`` remain supported. Grouped
+    assets store flat keys such as ``state::source/intern_a1/task_name``.
+    """
+
+    norm_stats: dict[str, NormStats] | None
+    use_quantiles: bool = False
+    group_key: str = "stats_group"
+    fallback_key: str = "stats_group_fallbacks"
+
+    def __post_init__(self):
+        if self.norm_stats is not None and self.use_quantiles:
+            _assert_quantile_stats(self.norm_stats)
+
+    def __call__(self, data: DataDict) -> DataDict:
+        state_dim_is_pad = data.pop("state_dim_is_pad", None)
+        actions_dim_is_pad = data.pop("actions_dim_is_pad", None)
+        dimension_masks = {
+            "state": np.asarray(state_dim_is_pad, dtype=bool) if state_dim_is_pad is not None else None,
+            "actions": np.asarray(actions_dim_is_pad, dtype=bool) if actions_dim_is_pad is not None else None,
+        }
+
+        def restore_padding_zero() -> DataDict:
+            for data_key, mask in dimension_masks.items():
+                if mask is None or data_key not in data:
+                    continue
+                value = np.asarray(data[data_key])
+                if mask.ndim != 1 or mask.shape[0] != value.shape[-1]:
+                    raise ValueError(f"{data_key}_dim_is_pad must have shape ({value.shape[-1]},), got {mask.shape}.")
+                data[data_key] = np.where(mask, np.zeros((), dtype=value.dtype), value)
+                if data_key == "actions":
+                    # Keep the action mask for loss diagnostics after restoring padded slots to zero.
+                    data["actions_dim_is_pad"] = mask
+            return data
+
+        if self.norm_stats is None:
+            data.pop(self.group_key, None)
+            data.pop(self.fallback_key, None)
+            return restore_padding_zero()
+
+        has_grouped_stats = any(_GROUPED_NORM_SEPARATOR in key for key in self.norm_stats)
+        if not has_grouped_stats:
+            data.pop(self.group_key, None)
+            data.pop(self.fallback_key, None)
+            data = Normalize(self.norm_stats, use_quantiles=self.use_quantiles)(data)
+            return restore_padding_zero()
+
+        if self.group_key not in data:
+            raise KeyError(f"Grouped norm stats require sample key {self.group_key!r}.")
+        group_value = np.asarray(data.pop(self.group_key))
+        if group_value.size != 1:
+            raise ValueError(f"Expected scalar {self.group_key}, got shape {group_value.shape}.")
+        stats_group = str(group_value.reshape(()).item())
+        fallback_values = np.asarray(data.pop(self.fallback_key, ()), dtype=str).reshape(-1).tolist()
+        candidates = [stats_group, *(str(value) for value in fallback_values)]
+        data_keys = tuple(key for key in ("state", "actions") if key in data)
+        selected_group = next(
+            (
+                candidate
+                for candidate in candidates
+                if all(grouped_norm_key(data_key, candidate) in self.norm_stats for data_key in data_keys)
+            ),
+            None,
+        )
+        if selected_group is None:
+            raise KeyError(f"Norm stats contain none of the candidate groups {candidates!r} for keys {data_keys!r}.")
+        for data_key in ("state", "actions"):
+            if data_key not in data:
+                continue
+            stats = self.norm_stats[grouped_norm_key(data_key, selected_group)]
+            value = data[data_key]
+            if self.use_quantiles:
+                assert stats.q01 is not None
+                assert stats.q99 is not None
+                q01 = stats.q01[..., : value.shape[-1]]
+                q99 = stats.q99[..., : value.shape[-1]]
+                data[data_key] = (value - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+            else:
+                mean = stats.mean[..., : value.shape[-1]]
+                std = stats.std[..., : value.shape[-1]]
+                data[data_key] = (value - mean) / (std + 1e-6)
+        return restore_padding_zero()
+
+
 @dataclasses.dataclass(frozen=True)
 class Unnormalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
@@ -334,6 +448,10 @@ class PadStatesAndActions(DataTransformFn):
         data["state"] = pad_to_dim(data["state"], self.model_action_dim, axis=-1)
         if "actions" in data:
             data["actions"] = pad_to_dim(data["actions"], self.model_action_dim, axis=-1)
+        if data.get("actions_dim_is_pad") is not None:
+            data["actions_dim_is_pad"] = pad_to_dim(
+                data["actions_dim_is_pad"], self.model_action_dim, axis=-1, value=True
+            )
         return data
 
 

@@ -1,0 +1,117 @@
+schema: openpi_petrel_control_profile_registry_v1
+enabled: true
+
+# ABC-130K uses the same dual-arm controls in every schema. Camera names differ
+# between the monocular-top (3-camera) and stereo-top (4-camera) recordings.
+profile_defaults:
+  control_type: dual_arm
+  mapping:
+    # ABC publishes EE poses as xyz + extrinsic Euler XYZ radians.
+    pose_input: xyz_rpy
+    action_pose_semantics: absolute_target
+    missing_policy: pad_and_mask
+    frame_transform:
+      world_from_source: identity
+      source_ee_from_canonical_ee: identity
+    slots:
+      left:
+        joint:
+          state_key: states.left_joint.position
+          action_key: actions.left_joint.position
+          raw_slice: [0, 6]
+          target_slot: left.joint
+        ee:
+          state_key: states.left_ee.position
+          action_key: actions.left_ee.position
+          raw_slice: [0, 6]
+          target_slot: left.ee
+        gripper:
+          state_key: states.left_gripper.position
+          action_key: actions.left_gripper.position
+          raw_slice: [0, 1]
+          target_slot: left.gripper
+      right:
+        joint:
+          state_key: states.right_joint.position
+          action_key: actions.right_joint.position
+          raw_slice: [0, 6]
+          target_slot: right.joint
+        ee:
+          state_key: states.right_ee.position
+          action_key: actions.right_ee.position
+          raw_slice: [0, 6]
+          target_slot: right.ee
+        gripper:
+          state_key: states.right_gripper.position
+          action_key: actions.right_gripper.position
+          raw_slice: [0, 1]
+          target_slot: right.gripper
+  fields:
+    state:
+      keys:
+      - states.left_joint.position
+      - states.left_joint.velocity
+      - states.left_joint.effort
+      - states.left_ee.position
+      - states.left_gripper.position
+      - states.right_joint.position
+      - states.right_joint.velocity
+      - states.right_joint.effort
+      - states.right_ee.position
+      - states.right_gripper.position
+    action:
+      keys:
+      - actions.left_joint.position
+      - actions.left_ee.position
+      - actions.left_gripper.position
+      - actions.right_joint.position
+      - actions.right_ee.position
+      - actions.right_gripper.position
+    language:
+      source: meta/tasks.parquet
+    timestamp:
+      key: timestamp
+    frame_index:
+      key: frame_index
+    task_index:
+      key: task_index
+
+control_profiles:
+  abc130k_3cam:
+    fields:
+      video:
+        keys:
+        - observation.images.top_camera
+        - observation.images.left_wrist_camera
+        - observation.images.right_wrist_camera
+        key_map:
+          observation.images.top_camera: base_0_rgb
+          observation.images.left_wrist_camera: left_wrist_0_rgb
+          observation.images.right_wrist_camera: right_wrist_0_rgb
+
+  # The default 4-camera policy view uses the left member of the stereo head pair.
+  abc130k_4cam_top_left:
+    fields:
+      video:
+        keys:
+        - observation.images.top_left_camera
+        - observation.images.left_wrist_camera
+        - observation.images.right_wrist_camera
+        key_map:
+          observation.images.top_left_camera: base_0_rgb
+          observation.images.left_wrist_camera: left_wrist_0_rgb
+          observation.images.right_wrist_camera: right_wrist_0_rgb
+
+  # Select this profile in the 4-camera dataset-group manifest to use the right
+  # member of the stereo head pair instead. The unselected stream is not decoded.
+  abc130k_4cam_top_right:
+    fields:
+      video:
+        keys:
+        - observation.images.top_right_camera
+        - observation.images.left_wrist_camera
+        - observation.images.right_wrist_camera
+        key_map:
+          observation.images.top_right_camera: base_0_rgb
+          observation.images.left_wrist_camera: left_wrist_0_rgb
+          observation.images.right_wrist_camera: right_wrist_0_rgb

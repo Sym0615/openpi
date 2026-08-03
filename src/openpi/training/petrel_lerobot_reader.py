@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # ruff: noqa
-"""Petrel direct reader for LeRobot-style episode parquet/mp4 data.
+"""Local filesystem reader for LeRobot-style episode parquet/mp4 data.
 
-This module is openpi's native Petrel reader and can also be run as a
-smoke-testable CLI for datasets whose directory layout matches either LeRobot
+This module can also be run as a smoke-testable CLI for datasets whose
+directory layout matches either LeRobot
 v2.1 or v3.0:
 
-    <remote_root>/meta/info.json
-    <remote_root>/meta/tasks.jsonl
-    <remote_root>/meta/episodes.jsonl
-    <remote_root>/data/chunk-000/episode_000000.parquet
-    <remote_root>/videos/chunk-000/<video_key>/episode_000000.mp4
+    <dataset_root>/meta/info.json
+    <dataset_root>/meta/tasks.jsonl
+    <dataset_root>/meta/episodes.jsonl
+    <dataset_root>/data/chunk-000/episode_000000.parquet
+    <dataset_root>/videos/chunk-000/<video_key>/episode_000000.mp4
 
 Recommended mixture example:
 
@@ -24,17 +24,15 @@ from __future__ import annotations
 import argparse
 import bisect
 from collections import OrderedDict
-import configparser
+import copy
 import hashlib
 import json
 import math
 import os
 import tempfile
 import time
-import threading
 from dataclasses import dataclass, replace
 from io import BytesIO
-from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any
 
@@ -52,8 +50,6 @@ V3_EPISODES_PATH = "meta/episodes/chunk-{chunk_index:03d}/file-{file_index:03d}.
 
 _PROFILE_ENABLED = False
 _PROFILE_EVENTS: list[tuple[str, float, dict[str, Any]]] = []
-PETRELOSS_CONF_PATHS = ("~/petreloss.conf",)
-PETRELOSS_CONF = PETRELOSS_CONF_PATHS[0]
 OPENPI_REPO_ROOT = Path(__file__).resolve().parents[3]
 CACHE_ROOT_PATHS = (str(OPENPI_REPO_ROOT / "data/petrel_cache"),)
 FRAME_FILTER_FILENAMES = ("frame_filter.jsonl", "frame_filter_sidecar.jsonl")
@@ -86,25 +82,6 @@ def _local_path_candidates(path: str | Path | None) -> list[Path]:
             seen.add(candidate)
             out.append(Path(candidate))
     return out
-
-
-def _resolve_petrel_conf(conf_path: str | None = None) -> str:
-    candidates: list[str] = []
-    if conf_path:
-        candidates.append(str(Path(conf_path).expanduser()))
-    candidates.extend(str(Path(path).expanduser()) for path in PETRELOSS_CONF_PATHS)
-
-    seen: set[str] = set()
-    unique_candidates = []
-    for path in candidates:
-        if path not in seen:
-            seen.add(path)
-            unique_candidates.append(path)
-
-    for path in unique_candidates:
-        if _is_file_accessible(Path(path)):
-            return path
-    return unique_candidates[0]
 
 
 def _profile_record(name: str, elapsed_s: float, **info: Any) -> None:
@@ -141,145 +118,6 @@ def _profile_print() -> None:
     for name, elapsed_s, info in _PROFILE_EVENTS:
         info_text = " ".join(f"{k}={v}" for k, v in info.items() if v is not None)
         print(f"[profile] {name}: {elapsed_s:.3f}s {info_text}".rstrip(), flush=True)
-
-
-@dataclass(frozen=True)
-class _S3Target:
-    section: str
-    bucket: str
-    key: str
-
-
-def _parse_petrel_s3_url(url: str) -> _S3Target:
-    text = str(url).strip()
-    if text.startswith("s3://"):
-        parsed = urlparse(text)
-        if not parsed.netloc:
-            raise ValueError(f"Invalid S3 URL: {url!r}")
-        return _S3Target(section="", bucket=parsed.netloc, key=parsed.path.strip("/"))
-    if ":" not in text:
-        raise ValueError(f"Petrel URL must include a config section, got {url!r}")
-    section, rest = text.split(":", 1)
-    section = section.strip()
-    rest = rest.strip()
-    if rest.startswith("s3://"):
-        parsed = urlparse(rest)
-        if not parsed.netloc:
-            raise ValueError(f"Invalid S3 URL: {url!r}")
-        return _S3Target(section=section, bucket=parsed.netloc, key=parsed.path.strip("/"))
-    bucket, _, key = rest.lstrip("/").partition("/")
-    if not section or not bucket:
-        raise ValueError(f"Invalid Petrel URL: {url!r}")
-    return _S3Target(section=section, bucket=bucket, key=key.strip("/"))
-
-
-def _read_petrel_conf(path: str) -> configparser.ConfigParser:
-    config = configparser.ConfigParser()
-    if not config.read(str(Path(path).expanduser())):
-        raise FileNotFoundError(f"Could not read Petrel config: {path}")
-    return config
-
-
-def _make_boto3_s3_client(config: configparser.ConfigParser, section: str) -> Any:
-    if not section or not config.has_section(section):
-        raise KeyError(f"Petrel config section {section!r} not found; available={config.sections()}")
-    access_key = config.get(section, "access_key", fallback=None)
-    secret_key = config.get(section, "secret_key", fallback=None)
-    endpoint = config.get(section, "host_base", fallback=None)
-    if not access_key or not secret_key or not endpoint:
-        raise KeyError(f"Petrel config section [{section}] requires access_key, secret_key, and host_base")
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError as exc:
-        raise ImportError("Remote Petrel access requires petrel_client or boto3/botocore.") from exc
-    return boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-    )
-
-
-class PetrelClient:
-    """Thread-safe Petrel client with an independent boto3 S3 fallback."""
-
-    _instances: dict[str, "PetrelClient"] = {}
-    _lock = threading.Lock()
-
-    def __new__(cls, conf_path: str = PETRELOSS_CONF):
-        requested_conf_path = str(Path(conf_path).expanduser()) if conf_path else PETRELOSS_CONF
-        conf_path = _resolve_petrel_conf(conf_path)
-        with cls._lock:
-            if conf_path not in cls._instances:
-                obj = super().__new__(cls)
-                obj._client = None
-                obj._s3_clients = {}
-                obj._s3_conf = None
-                obj.conf_path = conf_path
-                try:
-                    from petrel_client.client import Client
-
-                    t0 = time.perf_counter()
-                    obj._client = Client(conf_path)
-                    _profile_record("petrel.client_init", time.perf_counter() - t0, conf=conf_path)
-                    if conf_path != requested_conf_path:
-                        print(
-                            f"[PetrelClient] conf not found at {requested_conf_path}; using {conf_path}",
-                            flush=True,
-                        )
-                    print(f"[PetrelClient] initialized with conf: {conf_path}", flush=True)
-                except Exception as exc:
-                    if os.getenv("OPENPI_PETREL_BACKEND", "auto").lower() == "petrel":
-                        raise RuntimeError(
-                            "OPENPI_PETREL_BACKEND=petrel but petrel_client initialization failed: "
-                            f"{type(exc).__name__}: {exc}"
-                        ) from exc
-                    obj._s3_conf = _read_petrel_conf(conf_path)
-                    print(
-                        f"[PetrelClient] petrel_client unavailable ({type(exc).__name__}); "
-                        "using boto3 S3-compatible fallback",
-                        flush=True,
-                    )
-                cls._instances[conf_path] = obj
-        return cls._instances[conf_path]
-
-    def _boto3_get_bytes(self, url: str) -> bytes:
-        target = _parse_petrel_s3_url(url)
-        if target.section not in self._s3_clients:
-            if self._s3_conf is None:
-                self._s3_conf = _read_petrel_conf(self.conf_path)
-            self._s3_clients[target.section] = _make_boto3_s3_client(self._s3_conf, target.section)
-        t0 = time.perf_counter()
-        try:
-            response = self._s3_clients[target.section].get_object(Bucket=target.bucket, Key=target.key)
-            data = response["Body"].read()
-        except Exception as exc:
-            raise FileNotFoundError(f"[PetrelClient:boto3] failed to read {url}: {exc}") from exc
-        _profile_record(
-            _io_profile_name("boto3", url),
-            time.perf_counter() - t0,
-            bytes=len(data),
-            path=str(url).rsplit("/", 1)[-1],
-        )
-        return data
-
-    def get_bytes(self, url: str) -> bytes:
-        if self._client is None:
-            return self._boto3_get_bytes(url)
-        t0 = time.perf_counter()
-        data = self._client.get(url)
-        elapsed = time.perf_counter() - t0
-        _profile_record(
-            _io_profile_name("petrel", url),
-            elapsed,
-            bytes=len(data) if data is not None else None,
-            path=str(url).rsplit("/", 1)[-1],
-        )
-        if data is None:
-            raise FileNotFoundError(f"[PetrelClient] file not found: {url}")
-        return data
 
 
 class LocalFileClient:
@@ -321,14 +159,8 @@ def petrel_join(base_url: str, *parts: str) -> str:
     return url
 
 
-def _is_petrel_absolute_path(path: str) -> bool:
-    text = str(path)
-    if Path(text).is_absolute():
-        return True
-    if "://" in text:
-        return True
-    first_segment = text.split("/", 1)[0]
-    return ":" in first_segment
+def _is_absolute_dataset_path(path: str) -> bool:
+    return Path(str(path)).is_absolute()
 
 
 def _json_loads(raw: bytes) -> Any:
@@ -469,31 +301,16 @@ def _safe_name(text: str) -> str:
 
 
 def _safe_rel_path(text: str) -> str:
-    parts = [_safe_name(part) for part in str(text).strip("/").split("/") if part.strip("/")]
+    parts = [
+        _safe_name(part)
+        for part in str(text).strip("/").split("/")
+        if part.strip("/") and part not in {".", ".."}
+    ]
     return "/".join(part for part in parts if part)
 
 
-_REMOTE_CACHE_STRIP_PREFIXES = (
-    "manip:manip-dataset/private/sim/",
-    "manip:s3://manip-dataset/private/sim/",
-    "manip:manip-dataset/public/real/",
-    "manip:s3://manip-dataset/public/real/",
-    "shuju:s3://ego/miaoxingyu/",
-)
-
-
-def _relative_remote_cache_path(remote_root: str | None) -> str:
-    text = str(remote_root or "").strip()
-    for prefix in _REMOTE_CACHE_STRIP_PREFIXES:
-        if text.startswith(prefix):
-            return _safe_rel_path(text[len(prefix) :])
-    if "://" in text:
-        text = text.split("://", 1)[1]
-        parts = text.split("/", 1)
-        text = parts[1] if len(parts) > 1 else parts[0]
-    elif ":" in text:
-        text = text.split(":", 1)[1]
-    return _safe_rel_path(text)
+def _relative_dataset_cache_path(dataset_root: str | None) -> str:
+    return _safe_rel_path(str(dataset_root or ""))
 
 
 def _format_template(
@@ -629,6 +446,7 @@ def _parquet_num_rows(data: dict[str, torch.Tensor | list[Any]]) -> int:
 
 CANONICAL_LAYOUT_DIMS = {
     "robot": 80,
+    "openpi": 32,
 }
 
 
@@ -766,11 +584,29 @@ def _rotvec_to_rot6d(rotvec: torch.Tensor) -> torch.Tensor:
 
 def _format_xyz_rotvec_pose(pose: torch.Tensor, pose_output: str) -> torch.Tensor:
     pose_output = str(pose_output)
-    if pose_output == "xyz_rotvec":
+    if pose_output in {"xyz_rotvec", "delta_xyz_rotvec"}:
         return pose
     if pose_output == "xyz_rot6d":
         return torch.cat([pose[..., :3], _rotvec_to_rot6d(pose[..., 3:6])], dim=-1)
+    if pose_output in {"xyz_rpy", "delta_xyz_rpy"}:
+        return torch.cat([pose[..., :3], _rotvec_to_rpy(pose[..., 3:6])], dim=-1)
     raise ValueError(f"Unsupported canonical_adapter pose_output={pose_output!r}")
+
+
+def _rotvec_to_rpy(rotvec: torch.Tensor) -> torch.Tensor:
+    """Convert a rotation vector to roll/pitch/yaw using the reader's XYZ convention."""
+    rotation = _rotvec_to_matrix(rotvec)
+    sin_pitch = (-rotation[..., 2, 0]).clamp(-1.0, 1.0)
+    pitch = torch.asin(sin_pitch)
+    cos_pitch = torch.cos(pitch)
+    regular = cos_pitch.abs() > 1e-6
+    roll_regular = torch.atan2(rotation[..., 2, 1], rotation[..., 2, 2])
+    yaw_regular = torch.atan2(rotation[..., 1, 0], rotation[..., 0, 0])
+    # At gimbal lock, choose yaw=0 and absorb the remaining rotation into roll.
+    roll_lock = torch.atan2(-rotation[..., 1, 2], rotation[..., 1, 1])
+    roll = torch.where(regular, roll_regular, roll_lock)
+    yaw = torch.where(regular, yaw_regular, torch.zeros_like(yaw_regular))
+    return torch.stack([roll, pitch, yaw], dim=-1)
 
 
 def _pose_xyz_quat_wxyz(value: torch.Tensor, pose_input: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -967,18 +803,22 @@ def _pose_delta_world_from_transformed_xyz_rotvec(
     return torch.cat([delta_xyz_world, _matrix_to_rotvec(delta_rot)], dim=-1)
 
 
-def _assign_target(
-    out: torch.Tensor, dim_mask: torch.Tensor, target_slice: list[Any] | tuple[Any, ...], values: torch.Tensor
+def _assign_target_indices(
+    out: torch.Tensor, dim_mask: torch.Tensor, target_indices: list[Any] | tuple[Any, ...], values: torch.Tensor
 ) -> None:
-    if not isinstance(target_slice, (list, tuple)) or len(target_slice) != 2:
-        raise ValueError(f"target_slice must be [start, end], got {target_slice!r}")
-    start, end = int(target_slice[0]), int(target_slice[1])
-    expected = end - start
+    if not isinstance(target_indices, (list, tuple)) or not target_indices:
+        raise ValueError(f"target_indices must be a non-empty list, got {target_indices!r}")
+    indices = [int(index) for index in target_indices]
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"target_indices contains duplicate dimensions: {target_indices!r}")
+    if min(indices) < 0 or max(indices) >= out.shape[-1]:
+        raise ValueError(f"target_indices {target_indices!r} exceed output dimension {out.shape[-1]}")
     values = _as_feature_matrix(values, "target").to(out.dtype)
-    if values.shape[-1] != expected:
-        raise ValueError(f"target_slice {target_slice!r} expects {expected} dims, got {values.shape[-1]}")
-    out[..., start:end] = values
-    dim_mask[start:end] = False
+    if values.shape[-1] != len(indices):
+        raise ValueError(f"target_indices {target_indices!r} expects {len(indices)} dims, got {values.shape[-1]}")
+    index_tensor = torch.as_tensor(indices, dtype=torch.long, device=out.device)
+    out.index_copy_(-1, index_tensor, values)
+    dim_mask[index_tensor.cpu()] = False
 
 
 def _adapter_columns(adapter: dict[str, Any] | None) -> list[str]:
@@ -1099,7 +939,6 @@ def _decode_mp4_bytes_lerobot(
 class DatasetSpec:
     name: str
     remote_root: str
-    conf_path: str = PETRELOSS_CONF
     stats_path: str | None = "dataset_stats.json"
     local_stats_path: str | None = None
     local_meta_dir: str | None = None
@@ -1113,18 +952,18 @@ class DatasetSpec:
     embodiment: str = "default"
     control_schema: str | None = None
     stats_group: str | None = None
+    stats_group_fallbacks: tuple[str, ...] = ()
     dataset_weight: float = 1.0
     distribute_weights: bool = False
     action_target_dim: int | None = None
     state_target_dim: int | None = None
     source_name: str | None = None
     group_id: int = 0
-    storage_backend: str = "sdk"
     local_root: str | None = None
 
 
 class PetrelLeRobotDataset(torch.utils.data.Dataset):
-    """Map-style remote reader for one LeRobot v2.1/v3.0-style dataset."""
+    """Map-style reader for one locally mounted LeRobot v2.1/v3.0 dataset."""
 
     def __init__(
         self,
@@ -1142,29 +981,29 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
     ):
         self.spec = spec
         self.local_video_path_decode = bool(local_video_path_decode)
-        self._client: PetrelClient | LocalFileClient | None = None
-        self.name = spec.name  # petrel/dataset_groups/intern_a1/a1_articulation_franka.yaml-datasets-name
-        self.remote_root = spec.remote_root.rstrip("/") # dataset_groups/intern_a1/a1_articulation_franka.yaml-(root+datasets/name)
-        self.modalities = spec.modalities or {} # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/fields+fields)
-        self.canonical_adapter = spec.canonical_adapter or {} # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/mapping+mapping_overrides)
-        self.canonical_dim = _canonical_adapter_dim(self.canonical_adapter)  # 80
+        self._client: LocalFileClient | None = None
+        self.name = spec.name  # petrel/dataset_groups/xxx-dataset/xxx-task.yaml-datasets-name
+        self.remote_root = spec.remote_root.rstrip("/") # dataset_groups/xxx-dataset/xxx-task.yaml-(root+datasets/path)
+        self.modalities = spec.modalities or {} # /petrel/(dataset_groups/xxx-task.yaml+/control_profiles/xxx-dataset.yaml)-(fields+fields)
+        self.canonical_adapter = spec.canonical_adapter or {} # /petrel/(dataset_groups/xxx-task.yaml+/control_profiles/xxx-dataset.yaml)-(mapping+mapping_overrides)
+        self.canonical_dim = _canonical_adapter_dim(self.canonical_adapter)
         self.use_canonical_adapter = self.canonical_dim is not None
-        # List: a1_articulation_franka.yaml-state.keys
+        # List: dataset_groups/xxx-task.yaml-state.keys
         self.state_keys = _modality_keys(self.modalities, "state", "observation.state")
-        # List: a1_articulation_franka.yaml-action.keys
+        # List: dataset_groups/xxx-task.yaml-action.keys
         self.action_keys = _modality_keys(self.modalities, "action", "action")
         self.state_keys_config = list(self.state_keys)
         self.action_keys_config = list(self.action_keys)
         self.state_key = self.state_keys[0]
         self.action_key = self.action_keys[0]
-        # str a1_articulation_franka.yaml-timestamp.key
+        # str dataset_groups/xxx-task.yaml-timestamp.key
         self.timestamp_key = _modality_key(self.modalities, "timestamp", "timestamp")
-        # str a1_articulation_franka.yaml-frame_idex.key
+        # str dataset_groups/xxx-task.yaml-frame_idex.key
         self.frame_index_key = _modality_key(self.modalities, "frame_index", "frame_index")
-        # str a1_articulation_franka.yaml-task_index.key
+        # str dataset_groups/xxx-task.yaml-task_index.key
         self.task_index_key = _modality_key(self.modalities, "task_index", "task_index")
         self.video_key = _modality_key(self.modalities, "video", "")
-        # List: a1_articulation_franka.yaml-video.keys
+        # List: dataset_groups/xxx-task.yaml-video.keys
         self.video_keys_config = _modality_keys(self.modalities, "video", "")
         self.num_frames_per_sample = int(num_frames)
         self.action_size = int(action_size if action_size is not None else num_frames - 1)
@@ -1229,7 +1068,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         self.task_to_index = {task: task_index for task_index, task in self.tasks.items()}
         _profile_record("dataset.read_tasks", time.perf_counter() - t0, dataset=self.name, count=len(self.tasks))
         # which dataset use segment text
-        self.segment_action_text_enabled = self._should_use_segment_action_text()
+        self.segment_action_text_enabled = self._should_use_segment_action_text()   # return true or false
         self.subtask_action_segments: dict[int, tuple[tuple[int, int, str], ...]] = {}
 
         # openpi/data/petrel_cache/path_index/InternData-A1_v30/articulation_tasks/franka/close_the_electriccooker/path_index.jsonl
@@ -1664,14 +1503,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         return [self._path_index_row(int(key), self.episodes_dict[key]) for key in sorted(self.episodes_dict)]
 
     @property
-    def client(self) -> PetrelClient | LocalFileClient:
+    def client(self) -> LocalFileClient:
         if self._client is None:
-            if self.spec.storage_backend == "local":
-                if not self.spec.local_root:
-                    raise ValueError(f"Local dataset {self.name!r} is missing local_root.")
-                self._client = LocalFileClient(self.spec.local_root)
-            else:
-                self._client = PetrelClient(self.spec.conf_path)
+            if not self.spec.local_root:
+                raise ValueError(f"Local dataset {self.name!r} is missing local_root.")
+            self._client = LocalFileClient(self.spec.local_root)
         return self._client
 
     @property
@@ -1782,7 +1618,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
 
     def _remote_path(self, rel_or_abs_path: str) -> str:
         text = str(rel_or_abs_path)
-        if _is_petrel_absolute_path(text):
+        if _is_absolute_dataset_path(text):
             return text
         return petrel_join(self.remote_root, text)
 
@@ -2318,10 +2154,8 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
     def decode_episode_video(self, episode_index: int, video_key: str, timestamps: list[float]) -> torch.Tensor:
         """Decode requested frames, using direct path seek for the local backend."""
         rel_path = self._video_rel_path(episode_index, video_key)
-        if self.spec.storage_backend == "local" and self.local_video_path_decode:
+        if self.local_video_path_decode:
             client = self.client
-            if not isinstance(client, LocalFileClient):
-                raise TypeError("local storage backend did not create a LocalFileClient")
             path = client.resolve_path(self._remote_path(rel_path))
             started = time.perf_counter()
             try:
@@ -2513,8 +2347,9 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         indices: list[int],
         kind: str,
         next_indices: list[int] | None = None,
+        reference_indices: list[int] | None = None,
     ) -> torch.Tensor | None:
-        pose_input = self._canonical_pose_input(component, kind)
+        pose_input = self._canonical_pose_input(component, kind)  # mapping pose input
         selected_indices = indices
         if kind == "action" and component.get("action_from_next_action"):
             if next_indices is None:
@@ -2536,7 +2371,12 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
 
             semantic = _pose_semantics(kind, self.canonical_adapter, component)
             if semantic in {"absolute", "absolute_target", "target", "target_pose"}:
-                current_pose = self._canonical_absolute_pose_from_component(parquet, component, indices, "state")
+                current_pose = self._canonical_absolute_pose_from_component(
+                    parquet,
+                    component,
+                    reference_indices if reference_indices is not None else indices,
+                    "state",
+                )
                 target_pose = self._canonical_absolute_pose_from_component(
                     parquet, component, selected_indices, "action"
                 )
@@ -2614,6 +2454,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         indices: list[int],
         kind: str,
         next_indices: list[int] | None = None,
+        reference_indices: list[int] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if not self.use_canonical_adapter:
             raise RuntimeError("canonical projection requested without canonical_adapter")
@@ -2626,9 +2467,10 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
 
         skip_component_keys = {
             "pad",
-            "target_slice",
-            "state_target_slice",
-            "action_target_slice",
+            "target_slot",
+            "target_indices",
+            "state_target_indices",
+            "action_target_indices",
             "notes",
             "note",
         }
@@ -2641,11 +2483,18 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                 component = slot_cfg.get(component_name)
                 if not isinstance(component, dict) or component.get("pad") is True:
                     continue
-                target_slice = component.get(f"{kind}_target_slice") or component.get("target_slice")
-                if target_slice is None:
+                target_indices = component.get(f"{kind}_target_indices") or component.get("target_indices")
+                if target_indices is None:
                     continue
                 if component_name == "ee":
-                    values = self._canonical_pose_from_component(parquet, component, indices, kind, next_indices)
+                    values = self._canonical_pose_from_component(
+                        parquet,
+                        component,
+                        indices,
+                        kind,
+                        next_indices,
+                        reference_indices,
+                    )
                 elif kind == "action" and component.get("action_from_next_state"):
                     if next_indices is None:
                         raise ValueError(
@@ -2662,7 +2511,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                     values = self._canonical_component_tensor(parquet, component, indices, kind)
                 if values is None:
                     continue
-                _assign_target(out, dim_mask, target_slice, values)
+                _assign_target_indices(out, dim_mask, target_indices, values)
         return out, dim_mask
 
     def _canonical_action_delta_from_states(
@@ -2745,6 +2594,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         action_indices, action_pad = self._query_indices(frame_idx, episode_len, self.action_size)
         source_state_indices = self.source_frame_indices(episode_index, state_indices)
         source_action_indices = self.source_frame_indices(episode_index, action_indices)
+        source_action_reference_indices = [source_state_indices[0]] * len(source_action_indices)
         action_next_local_indices = [min(episode_len - 1, idx + self.global_sample_stride) for idx in action_indices]
         source_action_next_indices = self.source_frame_indices(episode_index, action_next_local_indices)
 
@@ -2767,6 +2617,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                 source_action_indices,
                 "action",
                 source_action_next_indices,
+                source_action_reference_indices,
             )
         else:
             state, state_dim_is_pad = _pad_last_dim(
@@ -2781,7 +2632,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             "embodiment": self.spec.embodiment,
             "control_schema": self.spec.control_schema or self.spec.embodiment,
             "stats_group": self.spec.stats_group or self.name,
+            "stats_group_fallbacks": self.spec.stats_group_fallbacks,
             "canonical_action_layout": self.canonical_adapter.get("layout", ""),
+            "action_delta_from_state_indices": tuple(
+                int(index) for index in self.canonical_adapter.get("delta_from_state_indices", ())
+            ),
             "episode_index": torch.tensor(episode_index, dtype=torch.long),
             "sample_frame_index": torch.tensor(frame_idx, dtype=torch.long),
             "source_episode_index": torch.tensor(self.source_episode_index(episode_index), dtype=torch.long),
@@ -2856,6 +2711,16 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             action_indices, action_pad = self._query_indices_batch(starts, episode_len, self.action_size)
             source_state_indices = self.source_frame_indices(int(episode_index), state_indices)
             source_action_indices = self.source_frame_indices(int(episode_index), action_indices)
+            state_reference_indices = (
+                torch.as_tensor(source_state_indices, dtype=torch.long)
+                .reshape(num_windows, self.num_frames_per_sample)[:, 0]
+            )
+            source_action_reference_indices = (
+                state_reference_indices[:, None]
+                .expand(num_windows, self.action_size)
+                .reshape(-1)
+                .tolist()
+            )
             action_next_indices = (
                 torch.as_tensor(action_indices, dtype=torch.long)
                 .add(int(self.global_sample_stride))
@@ -2876,6 +2741,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                     source_action_indices,
                     "action",
                     source_action_next_indices,
+                    source_action_reference_indices,
                 )
                 action = action_flat.reshape(num_windows, self.action_size, -1)
             else:
@@ -2893,6 +2759,10 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             yield {
                 "dataset_name": self.name,
                 "stats_group": self.spec.stats_group or self.name,
+                "stats_group_fallbacks": self.spec.stats_group_fallbacks,
+                "action_delta_from_state_indices": tuple(
+                    int(index) for index in self.canonical_adapter.get("delta_from_state_indices", ())
+                ),
                 "episode_index": torch.full((num_windows,), int(episode_index), dtype=torch.long),
                 "sample_frame_index": starts,
                 "observation.state": state,
@@ -3429,7 +3299,6 @@ def _resolve_include_path(path: str | Path, config_dir: Path) -> Path:
         out = config_dir / out
     return out
 
-
 def _merge_config_includes(payload: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     projection_files = payload.get("projection_files", payload.get("projection_file", []))
     if projection_files in (None, ""):
@@ -3552,18 +3421,193 @@ def _merge_config_includes(payload: dict[str, Any], config_dir: Path) -> dict[st
     return payload
 
 
-def _read_dataset_config(path: Path | None) -> dict[str, Any]:
-    if path is None:
-        return {}
+def _resolve_local_cache_template(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value).expanduser()
+    return str(path if path.is_absolute() else OPENPI_REPO_ROOT / path)
 
-    payload = _read_yaml_or_json(path)
-    if not isinstance(payload, dict):
-        return {}
-    config_dir = path.resolve().parent
-    payload = _merge_config_includes(payload, config_dir)
-    payload["_config_dir"] = str(config_dir)
-    return payload
 
+def _pose_output_dim(value: str) -> int:
+    value = str(value)
+    if value in {"xyz_rotvec", "delta_xyz_rotvec", "xyz_rpy", "delta_xyz_rpy"}:
+        return 6
+    if value == "xyz_rot6d":
+        return 9
+    raise ValueError(f"Unsupported source_control_space pose representation {value!r}.")
+
+
+def _control_slot_indices(value: Any, *, dim: int, path: str) -> list[int]:
+    if not isinstance(value, dict) or set(value) != {"indices"}:
+        raise TypeError(
+            f"source_control_space slot {path} must be a mapping containing only indices, got {value!r}."
+        )
+    raw_indices = value["indices"]
+    if not isinstance(raw_indices, (list, tuple)):
+        raise TypeError(f"source_control_space slot {path}.indices must be a list.")
+    indices = [int(index) for index in raw_indices]
+    if not indices:
+        raise ValueError(f"source_control_space slot {path} cannot be empty.")
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"source_control_space slot {path} contains duplicate indices: {indices}.")
+    if min(indices) < 0 or max(indices) >= dim:
+        raise ValueError(f"source_control_space slot {path}={indices} exceeds dim={dim}.")
+    return indices
+
+
+def _validate_source_control_space(value: Any, contract: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise TypeError("Petrel YAML source_control_space must be a mapping.")
+    name = value.get("name")
+    dim = int(value.get("dim", 0))
+    slots = value.get("slots")
+    if not isinstance(name, str) or not name:
+        raise ValueError("source_control_space.name must be a non-empty string.")
+    if dim <= 0:
+        raise ValueError("source_control_space.dim must be positive.")
+    if not isinstance(slots, dict) or not slots:
+        raise ValueError("source_control_space.slots must be a non-empty mapping.")
+    if dim != int(contract["state_dim"]) or dim != int(contract["action_dim"]):
+        raise ValueError(
+            "source_control_space.dim must equal "
+            f"openpi state/action dim; got source={dim}, state={contract['state_dim']}, action={contract['action_dim']}."
+        )
+
+    normalized_slots: dict[str, dict[str, list[int]]] = {}
+    claimed: dict[int, str] = {}
+    for side_name, side in slots.items():
+        if not isinstance(side_name, str) or not isinstance(side, dict):
+            raise TypeError("source_control_space.slots entries must map names to component mappings.")
+        normalized_side: dict[str, list[int]] = {}
+        for component_name, component_slot in side.items():
+            path = f"{side_name}.{component_name}"
+            indices = _control_slot_indices(component_slot, dim=dim, path=path)
+            for index in indices:
+                previous = claimed.get(index)
+                if previous is not None:
+                    raise ValueError(f"source_control_space slots {previous} and {path} overlap at dimension {index}.")
+                claimed[index] = path
+            normalized_side[str(component_name)] = indices
+        normalized_slots[str(side_name)] = normalized_side
+
+    pose = value.get("pose", {})
+    if not isinstance(pose, dict):
+        raise TypeError("source_control_space.pose must be a mapping.")
+    state_pose = str(pose.get("state", "xyz_rotvec"))
+    action_pose = str(pose.get("action", "delta_xyz_rotvec"))
+    _pose_output_dim(state_pose)
+    _pose_output_dim(action_pose)
+    action_semantics = value.get("action_semantics", {})
+    if not isinstance(action_semantics, dict):
+        raise TypeError("source_control_space.action_semantics must be a mapping.")
+    supported_semantics = {"absolute", "delta"}
+    invalid_semantics = {
+        str(component): str(semantic)
+        for component, semantic in action_semantics.items()
+        if str(semantic) not in supported_semantics
+    }
+    if invalid_semantics:
+        raise ValueError(
+            "source_control_space.action_semantics values must be absolute or delta; "
+            f"got {invalid_semantics}."
+        )
+    return {
+        **value,
+        "name": name,
+        "dim": dim,
+        "slots": slots,
+        "slot_indices": normalized_slots,
+        "pose": {"state": state_pose, "action": action_pose},
+        "action_semantics": {str(key): str(item) for key, item in action_semantics.items()},
+        "missing_policy": str(value.get("missing_policy", "pad_and_mask")),
+        "camera_frame_delta": bool(value.get("camera_frame_delta", False)),
+    }
+
+
+def _raw_component_width(component: dict[str, Any], kind: str, fallback: int) -> int:
+    raw_slice = _component_raw_slice(component, kind)
+    if raw_slice is None:
+        return fallback
+    if not isinstance(raw_slice, (list, tuple)) or len(raw_slice) != 2:
+        raise ValueError(f"{kind}_raw_slice must be [start, end], got {raw_slice!r}.")
+    start = 0 if raw_slice[0] is None else int(raw_slice[0])
+    end = fallback if raw_slice[1] is None else int(raw_slice[1])
+    if end <= start:
+        raise ValueError(f"{kind}_raw_slice must have positive width, got {raw_slice!r}.")
+    return end - start
+
+
+def _resolve_control_adapter(mapping: dict[str, Any], control_space: dict[str, Any], *, profile_name: str) -> dict[str, Any]:
+    adapter = copy.deepcopy(mapping)
+    adapter["layout"] = control_space["name"]
+    adapter["dim"] = int(control_space["dim"])
+    adapter["missing_policy"] = control_space["missing_policy"]
+    adapter["camera_frame_delta"] = control_space["camera_frame_delta"]
+    adapter["state_pose_output"] = control_space["pose"]["state"]
+    adapter["action_pose_output"] = control_space["pose"]["action"]
+    slots = adapter.get("slots")
+    if not isinstance(slots, dict) or not slots:
+        raise ValueError(f"Control profile {profile_name!r} mapping.slots must be non-empty.")
+
+    claimed: dict[str, dict[int, str]] = {"state": {}, "action": {}}
+    delta_from_state_indices: list[int] = []
+    for side_name, side in slots.items():
+        if not isinstance(side, dict):
+            raise TypeError(f"Control profile {profile_name!r} slot {side_name!r} must be a mapping.")
+        for component_name, component in side.items():
+            if component_name == "pad" or not isinstance(component, dict) or component.get("pad") is True:
+                continue
+            target_slot = component.get("target_slot")
+            if not isinstance(target_slot, str) or not target_slot:
+                raise ValueError(
+                    f"Control profile {profile_name!r} {side_name}.{component_name} requires target_slot."
+                )
+            target_parts = target_slot.split(".")
+            if len(target_parts) != 2:
+                raise ValueError(f"target_slot must use '<side>.<component>', got {target_slot!r}.")
+            try:
+                available_indices = control_space["slot_indices"][target_parts[0]][target_parts[1]]
+            except KeyError as exc:
+                raise KeyError(
+                    f"Control profile {profile_name!r} target_slot {target_slot!r} is not defined by "
+                    "source_control_space."
+                ) from exc
+
+            for kind in ("state", "action"):
+                key = component.get(f"{kind}_key") or component.get("key")
+                if not key:
+                    continue
+                if component_name == "ee":
+                    width = _pose_output_dim(control_space["pose"][kind])
+                else:
+                    width = _raw_component_width(component, kind, len(available_indices))
+                if width > len(available_indices):
+                    raise ValueError(
+                        f"Control profile {profile_name!r} {side_name}.{component_name} {kind} width={width} "
+                        f"does not fit target_slot {target_slot} width={len(available_indices)}."
+                    )
+                selected_indices = list(available_indices[:width])
+                component[f"{kind}_target_indices"] = selected_indices
+                for index in selected_indices:
+                    previous = claimed[kind].get(index)
+                    if previous is not None:
+                        raise ValueError(
+                            f"Control profile {profile_name!r} maps both {previous} and "
+                            f"{side_name}.{component_name} to {kind} dimension {index}."
+                        )
+                    claimed[kind][index] = f"{side_name}.{component_name}"
+
+            target_semantic = control_space["action_semantics"].get(str(component_name), "absolute")
+            source_semantic = str(component.get("action_semantics", "absolute"))
+            if component_name != "ee" and target_semantic == "delta" and source_semantic == "absolute":
+                delta_from_state_indices.extend(component.get("action_target_indices", ()))
+            elif component_name != "ee" and target_semantic != source_semantic:
+                raise ValueError(
+                    f"Control profile {profile_name!r} cannot convert {side_name}.{component_name} "
+                    f"from {source_semantic!r} to {target_semantic!r}."
+                )
+    adapter["delta_from_state_indices"] = sorted(set(delta_from_state_indices))
+    return adapter
 
 def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     """Validate openpi_petrel_v1 and translate it to the reader's internal dataset specs."""
@@ -3571,7 +3615,9 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
     storage = payload.get("storage")
     sampling = payload.get("sampling")
     mixture = payload.get("mixture")
+    norm_grouping = payload.get("norm_stats", {})
     dataset_files = payload.get("dataset_files")
+    control_space = _validate_source_control_space(payload.get("source_control_space"), contract)
     for name, value in (
         ("storage", storage),
         ("sampling", sampling),
@@ -3579,11 +3625,50 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
     ):
         if not isinstance(value, dict):
             raise TypeError(f"Petrel YAML {name} must be a mapping.")
+    if not isinstance(norm_grouping, dict):
+        raise TypeError("Petrel YAML norm_stats must be a mapping when provided.")
     if "control_profiles" in payload:
         raise ValueError(
-            "Global control_profiles are not supported; define exactly one selected control profile "
-            "inside each dataset-group YAML."
+            "Global inline control_profiles are not supported; use control_profile_files to register shared "
+            "profiles or define exactly one selected profile inside each dataset-group YAML."
         )
+    control_profile_files = payload.get("control_profile_files", [])
+    if control_profile_files in (None, ""):
+        control_profile_files = []
+    elif isinstance(control_profile_files, (str, Path)):
+        control_profile_files = [control_profile_files]
+    elif not isinstance(control_profile_files, list):
+        raise TypeError("Petrel YAML control_profile_files must be a path or list of paths.")
+
+    registered_profiles: dict[str, dict[str, Any]] = {}
+    for include in control_profile_files:
+        registry_path = _resolve_include_path(include, config_dir)
+        registry = _read_yaml_or_json(registry_path)
+        if not isinstance(registry, dict):
+            raise TypeError(f"Control profile registry must contain a mapping: {registry_path}")
+        if registry.get("schema") != "openpi_petrel_control_profile_registry_v1":
+            raise ValueError(
+                "Control profile registry must declare "
+                f"schema: openpi_petrel_control_profile_registry_v1: {registry_path}"
+            )
+        profiles = registry.get("control_profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            raise ValueError(f"Control profile registry requires a non-empty control_profiles mapping: {registry_path}")
+        profile_defaults = registry.get("profile_defaults", {})
+        if not isinstance(profile_defaults, dict):
+            raise TypeError(f"Control profile registry profile_defaults must be a mapping: {registry_path}")
+        for profile_name, profile in profiles.items():
+            if not isinstance(profile_name, str) or not profile_name:
+                raise ValueError(f"Control profile registry contains an invalid profile name: {registry_path}")
+            if not isinstance(profile, dict):
+                raise TypeError(f"Control profile {profile_name!r} must be a mapping: {registry_path}")
+            profile = _merge_mapping(profile_defaults, profile)
+            existing = registered_profiles.get(profile_name)
+            if existing is not None and existing != profile:
+                raise ValueError(
+                    f"Conflicting registered definitions for control profile {profile_name!r}: {registry_path}"
+                )
+            registered_profiles[profile_name] = profile
     if not isinstance(dataset_files, dict):
         raise TypeError("Petrel YAML dataset_files must be a mapping.")
     if "dataset_groups" in payload:
@@ -3617,20 +3702,28 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
                 raise ValueError(f"Dataset group YAML {dataset_path} requires non-empty {key!r}.")
         profile_name = group_payload["profile"]
         group_profiles = group_payload.get("control_profiles")
-        if not isinstance(group_profiles, dict) or not group_profiles:
-            raise ValueError(f"Dataset group YAML {dataset_path} requires a non-empty control_profiles mapping.")
-        if set(group_profiles) != {profile_name}:
-            raise ValueError(
-                f"Dataset group YAML {dataset_path} must define exactly its selected profile {profile_name!r}; "
-                f"got {sorted(group_profiles)}."
-            )
-        profile = group_profiles[profile_name]
+        if group_profiles is None:
+            profile = registered_profiles.get(profile_name)
+            if profile is None:
+                raise KeyError(
+                    f"Dataset group YAML {dataset_path} selects unregistered profile {profile_name!r}; "
+                    "define it inline under control_profiles or register it with control_profile_files."
+                )
+        else:
+            if not isinstance(group_profiles, dict) or not group_profiles:
+                raise ValueError(f"Dataset group YAML {dataset_path} control_profiles must be a non-empty mapping.")
+            if set(group_profiles) != {profile_name}:
+                raise ValueError(
+                    f"Dataset group YAML {dataset_path} must define exactly its selected profile {profile_name!r}; "
+                    f"got {sorted(group_profiles)}."
+                )
+            profile = group_profiles[profile_name]
         if not isinstance(profile, dict):
             raise TypeError(f"{dataset_path} control_profiles.{profile_name} must be a mapping.")
         mapping = profile.get("mapping")
         fields = profile.get("fields")
         if not isinstance(mapping, dict) or not isinstance(fields, dict):
-            raise ValueError(f"{dataset_path} control_profiles.{profile_name} requires mapping and fields mappings.")
+            raise ValueError(f"{dataset_path} control profile {profile_name!r} requires mapping and fields mappings.")
         existing_profile = profiles.get(profile_name)
         if existing_profile is not None and existing_profile != profile:
             raise ValueError(
@@ -3670,7 +3763,9 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
                 "fields": group_payload.get("fields"),
                 "mapping_overrides": group_payload.get("mapping_overrides"),
                 "control_type": group_payload.get("control_type"),
-                "petrel_conf": group_payload.get("petrel_conf"),
+                "stats_group": group_payload.get("stats_group"),
+                "stats_group_template": group_payload.get("stats_group_template"),
+                "robot_id": group_payload.get("robot_id"),
             }
         )
 
@@ -3682,11 +3777,13 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
         fields = profile.get("fields")
         if not isinstance(mapping, dict) or not isinstance(fields, dict):
             raise ValueError(f"control_profiles.{profile_name} requires mapping and fields mappings.")
+        resolved_mapping = _resolve_control_adapter(mapping, control_space, profile_name=profile_name)
         legacy_profiles[profile_name] = {
             "control_schema": profile.get("control_type"),
-            "canonical_adapter": mapping,
+            "canonical_adapter": resolved_mapping,
             "modalities": fields,
-            "conf_path": profile.get("petrel_conf"),
+            "stats_group": profile.get("stats_group"),
+            "stats_group_template": profile.get("stats_group_template"),
         }
 
     legacy_sources: list[dict[str, Any]] = []
@@ -3701,6 +3798,17 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
         datasets = group.get("datasets")
         if not isinstance(root, str) or not root:
             raise ValueError(f"dataset_groups[{index}].root must be a non-empty string.")
+        root_path = Path(root)
+        if root_path.is_absolute() or ":" in root.split("/", 1)[0] or ".." in root_path.parts:
+            raise ValueError(
+                f"dataset_groups[{index}].root must be relative to storage.local_root, got {root!r}."
+            )
+        robot_id = group.get("robot_id")
+        if robot_id is None:
+            root_parts = tuple(part for part in root_path.parts if part not in {"", "."})
+            robot_id = root_parts[1] if len(root_parts) >= 2 else profile_name
+        if not isinstance(robot_id, str) or not robot_id:
+            raise ValueError(f"dataset_groups[{index}].robot_id must be a non-empty string when provided.")
         if not isinstance(datasets, list) or not datasets:
             raise ValueError(f"dataset_groups[{index}].datasets must be a non-empty list.")
         children: list[Any] = []
@@ -3735,11 +3843,12 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
                 "modalities": group.get("fields"),
                 "canonical_adapter": group.get("mapping_overrides"),
                 "control_schema": group.get("control_type"),
-                "conf_path": group.get("petrel_conf"),
+                "stats_group": group.get("stats_group"),
+                "stats_group_template": group.get("stats_group_template"),
+                "robot_id": robot_id,
             }
         )
-    
-    # TODO single dataset
+
     cache_templates = { 
         "local_meta_dir": storage.get("metadata_cache"),
         "path_index_dir": storage.get("path_index_cache"),
@@ -3748,21 +3857,16 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
         if not isinstance(value, str) or not value:
             cache_templates.pop(key, None)
             continue
-        local_path = Path(value).expanduser()
-        if not local_path.is_absolute():
-            cache_templates[key] = str(OPENPI_REPO_ROOT / local_path)
+        cache_templates[key] = _resolve_local_cache_template(value)
 
     category_weights = mixture.get("category_weights", {})
     if not isinstance(category_weights, dict):
         raise TypeError("Petrel YAML mixture.category_weights must be a mapping.")
     return {
-        "schema": payload["schema"],
         "dataset_id": dataset_id,
         "openpi": contract,
-        "storage": {
-            "backend": str(storage.get("backend", "sdk")),
+        "storage": {  # TODO
             "local_root": storage.get("local_root"),
-            "local_remote_prefix": storage.get("local_remote_prefix"),
             "parquet_cache_size": int(storage.get("parquet_cache_size", 8)),
         },
         "sampling": {
@@ -3783,29 +3887,17 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
         "dataset_defaults": {
             "dataset_weight": 1.0,
             "distribute_weights": bool(mixture.get("distribute_category_weight_by_valid_windows", True)),
+            "dataset_stats_group": norm_grouping.get("dataset_group"),
+            "dataset_stats_group_template": norm_grouping.get("dataset_group_template"),
+            "dataset_id": dataset_id,
         },
         "dataset_weights": {"source_files": category_weights, "sources": {}, "datasets": {}, "embodiments": {}},
-        "canonical_action_space": payload.get("source_control_space", {}),
-        "embodiments": legacy_profiles,
-        "sources": legacy_sources,
-        "petrel_conf": str(storage.get("petrel_conf", "~/petreloss.conf")),
+        "canonical_action_space": control_space,
+        "source_control_space": control_space,
+        "embodiments": legacy_profiles,  # number = embodimets numbers
+        "sources": legacy_sources,   # number = sub_datasets numbsers  xxx-dataset/xxx-tasks number
         "_config_dir": str(config_dir),
     }
-
-
-def _deep_merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge a small dataset-specific config over a shared base config."""
-    merged = dict(base)
-    for key, value in override.items():
-        if key == "extends":
-            continue
-        if key == "category_weights":
-            merged[key] = value
-        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge_config(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
 
 
 def _validate_openpi_petrel_metadata(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -3828,13 +3920,19 @@ def _validate_openpi_petrel_metadata(payload: dict[str, Any]) -> tuple[str, dict
         raise ValueError("Petrel YAML openpi.images.slots must match the three pi0 camera slots.")
     if image_config.get("size") != [224, 224]:
         raise ValueError("Petrel YAML openpi.images.size must be [224, 224].")
+    key_map = image_config.get("key_map", {})
+    if not isinstance(key_map, dict):
+        raise TypeError("Petrel YAML openpi.images.key_map must be a mapping.")
+    invalid_targets = sorted({str(value) for value in key_map.values()} - set(image_config["slots"]))
+    if invalid_targets:
+        raise ValueError(f"Petrel YAML openpi.images.key_map contains invalid target slots: {invalid_targets}.")
+    if any(not isinstance(key, str) or not key for key in key_map):
+        raise ValueError("Petrel YAML openpi.images.key_map source keys must be non-empty strings.")
     if contract.get("normalization") not in {"quantile", "zscore"}:
         raise ValueError("Petrel YAML openpi.normalization must be quantile or zscore.")
-    supported_projections = {"compact_valid", "pi05_aloha_32"}
-    if contract.get("control_projection", "compact_valid") not in supported_projections:
-        raise ValueError(f"openpi_petrel_v1 control_projection must be one of {sorted(supported_projections)}.")
+    if contract.get("control_projection") != "mapped":
+        raise ValueError("openpi_petrel_v1 control_projection must be 'mapped'.")
     return dataset_id, contract
-
 
 def _resolve_openpi_petrel_path(config_path: str | Path) -> Path:
     path = Path(config_path).expanduser()
@@ -3842,91 +3940,48 @@ def _resolve_openpi_petrel_path(config_path: str | Path) -> Path:
         path = OPENPI_REPO_ROOT / path
     return path.resolve()
 
-
-def _read_openpi_petrel_payload(config_path: str | Path, active_paths: tuple[Path, ...] = ()) -> dict[str, Any]:
-    """Read an openpi Petrel YAML, resolving optional in-repository inheritance."""
-    path = _resolve_openpi_petrel_path(config_path)
-    if path in active_paths:
-        chain = " -> ".join(str(item) for item in (*active_paths, path))
-        raise ValueError(f"Cyclic Petrel YAML extends chain: {chain}")
-    payload = _read_yaml_or_json(path)
-    if not isinstance(payload, dict):
-        raise TypeError(f"Petrel config must be a mapping: {path}")
-    extends = payload.get("extends")
-    if extends is None:
-        return payload
-    if not isinstance(extends, str) or not extends:
-        raise ValueError(f"Petrel YAML extends must be a non-empty path: {path}")
-    base_path = Path(extends).expanduser()
-    if not base_path.is_absolute():
-        base_path = path.parent / base_path
-    base_payload = _read_openpi_petrel_payload(base_path, (*active_paths, path))
-    return _deep_merge_config(base_payload, payload)
-
-
 def read_openpi_petrel_metadata(config_path: str | Path) -> tuple[str, dict[str, Any]]:
     """Read the global dataset id and OpenPI contract without scanning dataset-group YAMLs."""
-    payload = _read_openpi_petrel_payload(config_path)
+    payload = _read_yaml_or_json(_resolve_openpi_petrel_path(config_path))
     return _validate_openpi_petrel_metadata(payload)
-
 
 def read_openpi_petrel_config(config_path: str | Path) -> dict[str, Any]:
     """Read and validate an openpi_petrel_v1 YAML without accessing remote data."""
     path = _resolve_openpi_petrel_path(config_path)
-    payload = _read_openpi_petrel_payload(path)
+    payload = _read_yaml_or_json(path)
     return _translate_openpi_petrel_config(payload, path.parent)
 
 
 def load_dataset_specs(
     config_path: str | Path,
-    conf_path: str | None = None,
     *,
-    storage_backend: str | None = None,
     local_root: str | None = None,
 ) -> tuple[dict[str, Any], list[DatasetSpec]]:
-    """Validate one OpenPI YAML and expand it into SDK or local dataset specs."""
+    """Validate one OpenPI YAML and expand it into local filesystem dataset specs."""
     config = read_openpi_petrel_config(config_path)
-    effective_conf = conf_path or config["petrel_conf"]
-    args = argparse.Namespace(
-        dataset_specs_json=None,
-        remote_root=None,
-        name="openpi_petrel",
-        conf=str(Path(effective_conf).expanduser()),
-    )
-    specs = _load_specs(args, config)
+    specs = _flatten_source_specs(config)
+    if not specs:
+        raise ValueError(f"Dataset config expanded to no dataset specs: {config_path}")
     storage = config["storage"]
-    backend = str(storage_backend or storage.get("backend", "sdk")).lower()
-    if backend not in {"sdk", "local"}:
-        raise ValueError(f"storage_backend must be 'sdk' or 'local', got {backend!r}.")
-    storage["backend"] = backend
-    if backend == "sdk":
-        return config, specs
-
     configured_root = local_root or storage.get("local_root")
     if not configured_root:
         raise ValueError("Local storage requires local_root in YAML or the command-line override.")
     resolved_root = Path(str(configured_root)).expanduser().resolve()
     if not resolved_root.is_dir():
         raise FileNotFoundError(f"Local dataset root does not exist or is not a directory: {resolved_root}")
-    remote_prefix = str(storage.get("local_remote_prefix") or "").rstrip("/")
-    if not remote_prefix:
-        raise ValueError("Local storage requires storage.local_remote_prefix in the dataset YAML.")
 
     local_specs: list[DatasetSpec] = []
     missing_local_roots: list[Path] = []
     local_children: dict[Path, set[str]] = {}
-    projection = str(config["openpi"].get("control_projection", "compact_valid"))
     for spec in specs:
-        remote_root = spec.remote_root.rstrip("/")
-        if remote_root == remote_prefix:
-            relative = ""
-        elif remote_root.startswith(remote_prefix + "/"):
-            relative = remote_root[len(remote_prefix) + 1 :]
-        else:
+        relative_root = Path(spec.remote_root)
+        if relative_root.is_absolute() or ".." in relative_root.parts:
             raise ValueError(
-                f"Dataset root {remote_root!r} is outside configured local_remote_prefix {remote_prefix!r}."
+                f"Dataset root must be relative to storage.local_root, got {spec.remote_root!r}."
             )
-        local_dataset_root = resolved_root / relative
+        local_dataset_root = (resolved_root / relative_root).resolve()
+        if not local_dataset_root.is_relative_to(resolved_root):
+            raise ValueError(f"Dataset root escapes storage.local_root: {local_dataset_root}")
         parent = local_dataset_root.parent
         if parent not in local_children:
             try:
@@ -3936,44 +3991,20 @@ def load_dataset_specs(
         if local_dataset_root.name not in local_children[parent]:
             missing_local_roots.append(local_dataset_root)
             continue
-        cache_namespace = f"local-{hashlib.sha256(str(resolved_root).encode()).hexdigest()[:12]}"
-        local_meta_dir = str(Path(spec.local_meta_dir) / cache_namespace) if spec.local_meta_dir else None
-        path_index_dir = str(Path(spec.path_index_dir) / cache_namespace) if spec.path_index_dir else None
-        canonical_adapter = spec.canonical_adapter
-        if projection == "pi05_aloha_32" and isinstance(canonical_adapter, dict):
-            canonical_adapter = dict(canonical_adapter)
-            slots = canonical_adapter.get("slots")
-            if isinstance(slots, dict):
-                canonical_adapter["slots"] = {
-                    slot_name: {
-                        component_name: component
-                        for component_name, component in slot.items()
-                        if component_name in {"joint", "gripper", "pad"}
-                    }
-                    for slot_name, slot in slots.items()
-                    if isinstance(slot, dict)
-                }
         local_specs.append(
             replace(
                 spec,
                 remote_root=str(local_dataset_root),
-                storage_backend="local",
                 local_root=str(resolved_root),
-                local_meta_dir=local_meta_dir,
-                path_index_dir=path_index_dir,
-                canonical_adapter=canonical_adapter,
-                # The local mirror may use a different LeRobot generation than the SDK object.
-                # Detect v2/v3 from its own meta/info.json instead of forcing the remote YAML value.
+                # Detect v2/v3 from each local dataset's own meta/info.json.
                 format_version=None,
             )
         )
-    if not local_specs:
-        raise FileNotFoundError(f"No configured dataset directories were found under {resolved_root}.")
     if missing_local_roots:
-        print(
-            f"[LocalFileClient] using {len(local_specs)}/{len(specs)} configured datasets under {resolved_root}; "
-            f"skipped {len(missing_local_roots)} missing dataset roots",
-            flush=True,
+        preview = ", ".join(str(path) for path in missing_local_roots[:5])
+        raise FileNotFoundError(
+            f"{len(missing_local_roots)}/{len(specs)} configured dataset directories are missing under "
+            f"{resolved_root}; first missing paths: {preview}"
         )
     storage["local_root"] = str(resolved_root)
     return config, local_specs
@@ -4066,7 +4097,6 @@ def _infer_stats_group(remote_root: str, dataset_name: str, embodiment: str, con
 
 def _make_spec(
     item: dict[str, Any] | str,
-    args: argparse.Namespace,
     *,
     idx: int,
     group_id: int,
@@ -4074,21 +4104,20 @@ def _make_spec(
 ) -> DatasetSpec:
     inherited = inherited or {}
 
-    # item {"name": petrel/dataset_groups/intern_a1/a1_articulation_franka.yaml-datasets-name,
-    #       "dir": petrel/dataset_groups/intern_a1/a1_articulation_franka.yaml-datasets-name}
+    # item {"name": petrel/dataset_groups/xxx-dataset/xxx-task.yaml-datasets-name,
+    #       "dir": petrel/dataset_groups/xxx-dataset/xxx-task.yaml-datasets-path}
     if isinstance(item, str):
         item = {"dir": item}
     
     remotes = inherited.get("_remotes", {}) if isinstance(inherited.get("_remotes"), dict) else {}  # {}
     remote_name = str(item.get("remote") or inherited.get("remote") or "")  # {}
-    remote_base = item.get("remote_base", inherited.get("remote_base"))   # dataset_groups/intern_a1/a1_articulation_franka.yaml-root
+    remote_base = item.get("remote_base", inherited.get("remote_base"))   # dataset_groups/xxx-dataset/xxx-task.yaml-root
     if not remote_base and remote_name:
         if remote_name not in remotes:
             raise KeyError(f"Unknown remote alias {remote_name!r}; available={sorted(remotes)}")
         remote_base = remotes[remote_name]
 
     base_path = str(item.get("base_path", inherited.get("base_path", ""))).strip("/")  # ""
-    # "dir": petrel/dataset_groups/intern_a1/a1_articulation_franka.yaml-datasets-name
     rel_path = item.get("dir", item.get("path", item.get("relative_path", "")))
     rel_path = str(rel_path).strip("/") if rel_path not in (None, "") else ""
 
@@ -4099,7 +4128,7 @@ def _make_spec(
             parts.append(base_path)
         if rel_path:
             parts.append(rel_path)
-        remote_root = petrel_join(parts[0], *parts[1:])  # dataset_groups/intern_a1/a1_articulation_franka.yaml-(root+datasets/name)
+        remote_root = petrel_join(parts[0], *parts[1:])  # dataset_groups/xxx-dataset/xxx-task.yaml-(root+datasets/path)
     if not remote_root:
         raise KeyError(f"dataset spec {idx} is missing remote_root or remote/base_path/dir")
 
@@ -4116,6 +4145,8 @@ def _make_spec(
         or inherited.get("embodiment")
         or "default"
     )
+    dataset_id = str(inherited.get("dataset_id") or "dataset")
+    robot_id = str(item.get("robot_id") or inherited.get("robot_id") or embodiment)
 
     stats_value = item.get("stats_path", inherited.get("stats_path", "dataset_stats.json"))
     local_stats_value = item.get("local_stats_path", inherited.get("local_stats_path"))
@@ -4130,7 +4161,7 @@ def _make_spec(
     )
 
     source_name = inherited.get("source_name") or inherited.get("_source_file") or remote_name
-    relative_remote = _relative_remote_cache_path(str(remote_root))
+    relative_remote = _relative_dataset_cache_path(str(remote_root))
     local_meta_value = local_meta_value or _format_template(
         inherited.get("local_meta_dir_template"),
         name=dataset_name,
@@ -4139,6 +4170,8 @@ def _make_spec(
         source=source_name,
         relative_remote=relative_remote,
         embodiment=embodiment,
+        dataset_id=dataset_id,
+        robot_id=robot_id,
     )  # 
     local_stats_value = local_stats_value or _format_template(
         inherited.get("local_stats_path_template"),
@@ -4148,6 +4181,8 @@ def _make_spec(
         source=source_name,
         relative_remote=relative_remote,
         embodiment=embodiment,
+        dataset_id=dataset_id,
+        robot_id=robot_id,
     )  # None
     path_index_value = path_index_value or _format_template(
         inherited.get("path_index_dir_template"),  
@@ -4157,7 +4192,9 @@ def _make_spec(
         source=source_name,
         relative_remote=relative_remote,
         embodiment=embodiment,
-    )  #  openpi/data/petrel_cache/path_index/InternData-A1_v30/articulation_tasks/franka/close_the_electriccooker/path_index.jsonl
+        dataset_id=dataset_id,
+        robot_id=robot_id,
+    )  # data/petrel_cache/path_index/{dataset_id}/{remote}
     local_text_cache_value = local_text_cache_value or _format_template(
         inherited.get("local_text_embedding_cache_dir_template"),
         name=dataset_name,
@@ -4166,6 +4203,8 @@ def _make_spec(
         source=source_name,
         relative_remote=relative_remote,
         embodiment=embodiment,
+        dataset_id=dataset_id,
+        robot_id=robot_id,
     )  # None
 
     dataset_weight = float(item.get("dataset_weight", inherited.get("dataset_weight", 1.0)))
@@ -4192,32 +4231,55 @@ def _make_spec(
             embodiment=embodiment,
             body=body,
             control_schema=control_schema or "",
+            dataset_id=dataset_id,
+            robot_id=robot_id,
         )
+    stats_group_fallbacks: list[str] = []
+    for fallback in inherited.get("stats_group_fallbacks", ()):
+        if fallback and str(fallback) != str(stats_group) and str(fallback) not in stats_group_fallbacks:
+            stats_group_fallbacks.append(str(fallback))
+    for fallback_template in inherited.get("stats_group_fallback_templates", ()):
+        fallback = _format_template(
+            fallback_template,
+            name=dataset_name,
+            path=dataset_path,
+            remote=str(remote_root),
+            source=source_name,
+            relative_remote=relative_remote,
+            embodiment=embodiment,
+            control_schema=control_schema or "",
+            dataset_id=dataset_id,
+            robot_id=robot_id,
+        )
+        if fallback and fallback != stats_group and fallback not in stats_group_fallbacks:
+            stats_group_fallbacks.append(fallback)
+    if not stats_group and stats_group_fallbacks:
+        stats_group = stats_group_fallbacks.pop(0)
     if not stats_group:
         stats_group = _infer_stats_group(str(remote_root), dataset_name, embodiment, control_schema)
 
     return DatasetSpec(
-        name=dataset_name,  # petrel/dataset_groups/intern_a1/a1_articulation_franka.yaml-datasets-name
-        remote_root=str(remote_root), # dataset_groups/intern_a1/a1_articulation_franka.yaml-(root+datasets/name)
-        conf_path=str(item.get("conf_path") or inherited.get("conf_path") or args.conf),  # ~/petreloss.conf
+        name=dataset_name,  # petrel/dataset_groups/xxx-dataset/xxx-task.yaml-datasets-name
+        remote_root=str(remote_root), # dataset_groups/xxx-dataset/xxx-task.yaml-(root+datasets/name)
         stats_path=_optional_str(stats_value),  # dataset_stats.json
         local_stats_path=_optional_str(local_stats_value),  # None
-        local_meta_dir=_optional_str(local_meta_value),  #  openpi/data/petrel_cache/meta/InternData-A1_v30/articulation_tasks/franka/close_the_electriccooker/
-        path_index_dir=_optional_str(path_index_value),  #  openpi/data/petrel_cache/path_index/InternData-A1_v30/articulation_tasks/franka/close_the_electriccooker/
+        local_meta_dir=_optional_str(local_meta_value),  # data/petrel_cache/meta/{dataset_id}/{remote}
+        path_index_dir=_optional_str(path_index_value),  # data/petrel_cache/path_index/{dataset_id}/{remote}
         local_text_embedding_cache_dir=_optional_str(local_text_cache_value),  # None
         context_len=int(item.get("context_len", inherited.get("context_len", 128))), # 128
         text_encoder_id=None, # str(item.get("text_encoder_id", inherited.get("text_encoder_id", "wan22ti2v5b"))),
-        # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/mapping+mapping_overrides)
+        # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(mapping+mapping_overrides)
         modalities=modalities, 
-        # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/fields+fields)
+        # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(control_profiles/fields+fields)
         canonical_adapter=_merge_mapping(inherited.get("canonical_adapter"), item.get("canonical_adapter")),
         format_version=_parse_format_major(
             item.get("format_version", item.get("format", inherited.get("format_version", inherited.get("format"))))
         ), 
-        embodiment=embodiment, # #  dataset_groups/intern_a1/a1_articulation_franka.yaml-profile
+        embodiment=embodiment, # #  dataset_groups/xxx-dataset/xxx-task.yaml-profile
         control_schema=control_schema,  # control_type
-        stats_group=_optional_str(stats_group), # TODO
-        source_name=_optional_str(source_name),  #  dataset_groups/intern_a1/a1_articulation_franka.yaml-name
+        stats_group=_optional_str(stats_group),  # dataset_groups/xxx-dataset/xxx-task.yaml-stats_group or stats_group_template
+        stats_group_fallbacks=tuple(stats_group_fallbacks),  # control_profiles/xxx.yaml or pi05_xxx.yaml-stats_group or stats_group_template
+        source_name=_optional_str(source_name),  #  dataset_groups/xxx-dataset/xxx-task.yaml-name
         dataset_weight=dataset_weight,
         distribute_weights=distribute_weights, # True
         action_target_dim=item.get("action_target_dim", inherited.get("action_target_dim")), # None
@@ -4280,99 +4342,11 @@ def _dataset_entries_from_group(group: dict[str, Any], config_dir: str | None) -
     return entries or [group]
 
 
-def _flatten_mixture_specs(args: argparse.Namespace, config: dict[str, Any]) -> list[DatasetSpec] | None:
-    mixture = config.get("mixture")
-    if not isinstance(mixture, dict) or not isinstance(mixture.get("specs"), list):
-        return None
-
-    remotes = config.get("remotes", {}) if isinstance(config.get("remotes"), dict) else {}
-    cache_templates = config.get("cache_templates", {}) if isinstance(config.get("cache_templates"), dict) else {}
-    dataset_defaults = config.get("dataset_defaults", {}) if isinstance(config.get("dataset_defaults"), dict) else {}
-    weight_config = config.get("dataset_weights", {}) if isinstance(config.get("dataset_weights"), dict) else {}
-    default_dataset_weight = float(dataset_defaults.get("dataset_weight", config.get("dataset_weight", 1.0)))
-    default_distribute_weights = bool(
-        dataset_defaults.get("distribute_weights", config.get("distribute_weights", False))
-    )
-    source_weight_overrides = weight_config.get("sources", {}) if isinstance(weight_config, dict) else {}
-    dataset_weight_overrides = weight_config.get("datasets", {}) if isinstance(weight_config, dict) else {}
-    config_dir = config.get("_config_dir")
-
-    specs: list[DatasetSpec] = []
-    for group_id, group in enumerate(mixture["specs"]):
-        if not isinstance(group, dict):
-            raise TypeError(f"mixture.specs[{group_id}] must be a mapping")
-        if group.get("enabled", True) is False:
-            continue
-        source_name = str(group.get("name") or group.get("_source_file") or "")
-        inherited = {
-            "_remotes": remotes,
-            "_source_file": group.get("_source_file"),
-            "source_name": source_name,
-            "remote": group.get("remote"),
-            "remote_base": group.get("remote_base"),
-            "base_path": group.get("base_path", ""),
-            "conf_path": group.get("conf_path"),
-            "stats_path": group.get("stats_path", "dataset_stats.json"),
-            "local_stats_path": group.get("local_stats_path"),
-            "local_meta_dir": group.get("local_meta_dir"),
-            "path_index_dir": group.get("path_index_dir"),
-            "local_text_embedding_cache_dir": group.get(
-                "local_text_embedding_cache_dir", group.get("text_embedding_cache_dir")
-            ),
-            "local_meta_dir_template": group.get("local_meta_dir_template", cache_templates.get("local_meta_dir")),
-            "path_index_dir_template": group.get("path_index_dir_template", cache_templates.get("path_index_dir")),
-            "local_stats_path_template": group.get(
-                "local_stats_path_template", cache_templates.get("local_stats_path")
-            ),
-            "local_text_embedding_cache_dir_template": group.get(
-                "local_text_embedding_cache_dir_template",
-                cache_templates.get("local_text_embedding_cache_dir"),
-            ),
-            "context_len": group.get("context_len", 128),
-            "text_encoder_id": group.get("text_encoder_id", "wan22ti2v5b"),
-            "modalities": group.get("modalities"),
-            "canonical_adapter": group.get("canonical_adapter"),
-            "format_version": group.get("format_version", group.get("format")),
-            "embodiment": group.get("embodiment", "default"),
-            "control_schema": group.get("control_schema"),
-            "stats_group": group.get("stats_group"),
-            "stats_group_template": group.get("stats_group_template"),
-            "dataset_weight": _apply_weight_override(
-                float(group.get("dataset_weight", default_dataset_weight)),
-                bool(group.get("distribute_weights", default_distribute_weights)),
-                _lookup_weight_override(
-                    source_weight_overrides,
-                    [group.get("name"), group.get("_source_file"), group.get("remote_base", group.get("address"))],
-                ),
-            )[0],
-            "distribute_weights": _apply_weight_override(
-                float(group.get("dataset_weight", default_dataset_weight)),
-                bool(group.get("distribute_weights", default_distribute_weights)),
-                _lookup_weight_override(
-                    source_weight_overrides,
-                    [group.get("name"), group.get("_source_file"), group.get("remote_base", group.get("address"))],
-                ),
-            )[1],
-            "dataset_weight_overrides": dataset_weight_overrides,
-            "action_target_dim": group.get("action_target_dim"),
-            "state_target_dim": group.get("state_target_dim"),
-        }
-        children = _dataset_entries_from_group(group, config_dir)
-        for child in children:
-            if not isinstance(child, (dict, str)):
-                raise TypeError(f"mixture.specs[{group_id}] dataset entry must be a mapping or string")
-            if isinstance(child, dict) and child.get("enabled", True) is False:
-                continue
-            specs.append(_make_spec(child, args, idx=len(specs), group_id=group_id, inherited=inherited))
-    return specs
-
-
-def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> list[DatasetSpec] | None:
+def _flatten_source_specs(config: dict[str, Any]) -> list[DatasetSpec] | None:
     sources = config.get("sources")
     if not isinstance(sources, list):
         return None
 
-    remotes = config.get("remotes", {}) if isinstance(config.get("remotes"), dict) else {}
     cache_templates = config.get("cache_templates", {}) if isinstance(config.get("cache_templates"), dict) else {}
     dataset_defaults = config.get("dataset_defaults", {}) if isinstance(config.get("dataset_defaults"), dict) else {}
     weight_config = config.get("dataset_weights", {}) if isinstance(config.get("dataset_weights"), dict) else {}
@@ -4437,22 +4411,16 @@ def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> l
                 source_distribute,
                 _lookup_weight_override(embodiment_weight_overrides, [embodiment]),
             )
-        # TODO  DEL _merge
         source_modalities = _merge_mapping(emb_cfg.get("modalities"), source.get("modalities"))
         source_canonical_adapter = _merge_mapping(emb_cfg.get("canonical_adapter"), source.get("canonical_adapter"))
         inherited = {
-            "_remotes": remotes,  # {}
             "_source_file": source.get("_source_file"),  # category
-            "source_name": source_name,  #  dataset_groups/intern_a1/a1_articulation_franka.yaml-name
+            "source_name": source_name,  #  dataset_groups/xxx-dataset/xxx-task.yaml-name
             "remote": source.get("remote", emb_cfg.get("remote")),  #  {}
-            #  dataset_groups/intern_a1/a1_articulation_franka.yaml-root
+            #  dataset_groups/xxx-dataset/xxx-task.yaml-root
             "remote_base": source.get("remote_base", address if address is not None else emb_cfg.get("remote_base")),
             "base_path": source.get("base_path", emb_cfg.get("base_path", "")),  # ""
-            "conf_path": source.get("conf_path") or emb_cfg.get("conf_path"),  # None
             "stats_path": source.get("stats_path", emb_cfg.get("stats_path", "dataset_stats.json")),  # "dataset_stats.json"
-            "local_stats_path": source.get("local_stats_path", emb_cfg.get("local_stats_path")),  # None
-            "local_meta_dir": source.get("local_meta_dir", emb_cfg.get("local_meta_dir")),  # None
-            "path_index_dir": source.get("path_index_dir", emb_cfg.get("path_index_dir")),  # None
             "local_text_embedding_cache_dir": source.get(
                 "local_text_embedding_cache_dir",
                 source.get(
@@ -4460,16 +4428,10 @@ def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> l
                     emb_cfg.get("local_text_embedding_cache_dir", emb_cfg.get("text_embedding_cache_dir")),
                 ),
             ), # None
-            "local_meta_dir_template": source.get(
-                "local_meta_dir_template", emb_cfg.get("local_meta_dir_template", cache_templates.get("local_meta_dir"))
-            ),  #  openpi/configs/petrel/pi05_petrel.yaml-storage-metadata_cache
-            "path_index_dir_template": source.get(
-                "path_index_dir_template", emb_cfg.get("path_index_dir_template", cache_templates.get("path_index_dir"))
-            ),  #  openpi/configs/petrel/pi05_petrel.yaml-storage-path_index_cache
-            "local_stats_path_template": source.get(
-                "local_stats_path_template",
-                emb_cfg.get("local_stats_path_template", cache_templates.get("local_stats_path")),
-            ),  # None
+            "local_meta_dir_template": source.get("local_meta_dir_template")
+            or cache_templates.get("local_meta_dir"),  # openpi/configs/petrel/pi05_xxx.yaml-storage-metadata_cache
+            "path_index_dir_template": source.get("path_index_dir_template")
+            or cache_templates.get("path_index_dir"),  # openpi/configs/petrel/pi05_xxx.yaml-storage-path_index_cache
             "local_text_embedding_cache_dir_template": source.get(
                 "local_text_embedding_cache_dir_template",
                 emb_cfg.get(
@@ -4477,16 +4439,33 @@ def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> l
                 ),
             ),  # None
             "context_len": source.get("context_len", emb_cfg.get("context_len", 128)),  # 128
-            "text_encoder_id": source.get("text_encoder_id", emb_cfg.get("text_encoder_id", "wan22ti2v5b")),
-            "modalities": source_modalities,   # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/mapping+mapping_overrides)
-            "canonical_adapter": source_canonical_adapter,  # /petrel/dataset_groups/intern_a1/xxx.yaml-(control_profiles/fields+fields)
+            "modalities": source_modalities,   # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(mapping+mapping_overrides)
+            "canonical_adapter": source_canonical_adapter,  # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(fields+fields)
             "format_version": source.get(
                 "format_version", source.get("format", emb_cfg.get("format_version", emb_cfg.get("format")))
-            ),  # dataset_groups/intern_a1/a1_articulation_franka.yaml-format
-            "embodiment": embodiment,  #  dataset_groups/intern_a1/a1_articulation_franka.yaml-profile
+            ),  # dataset_groups/xxx-dataset/xxx-task.yaml-format
+            "embodiment": embodiment,  #  dataset_groups/xxx-dataset/xxx-task.yaml-profile
             "control_schema": source.get("control_schema") or emb_cfg.get("control_schema"),
-            "stats_group": source.get("stats_group", emb_cfg.get("stats_group")),  # None
-            "stats_group_template": source.get("stats_group_template", emb_cfg.get("stats_group_template")),  # None
+            "dataset_id": dataset_defaults.get("dataset_id", config.get("dataset_id")),
+            "robot_id": source.get("robot_id"),
+            "stats_group": source.get("stats_group"),  # dataset_groups/xxx-dataset/xxx-task.yaml-stats_group
+            "stats_group_template": source.get("stats_group_template"),  # dataset group task-level norm
+            "stats_group_fallbacks": tuple(
+                value
+                for value in (
+                    emb_cfg.get("stats_group"),
+                    dataset_defaults.get("dataset_stats_group"),
+                )
+                if value
+            ),
+            "stats_group_fallback_templates": tuple(
+                value
+                for value in (
+                    emb_cfg.get("stats_group_template"),
+                    dataset_defaults.get("dataset_stats_group_template"),
+                )
+                if value
+            ),
             "dataset_weight": source_weight,  # dataset weight
             "distribute_weights": source_distribute,  
             "dataset_weight_overrides": dataset_weight_overrides,  # {}
@@ -4499,33 +4478,8 @@ def _flatten_source_specs(args: argparse.Namespace, config: dict[str, Any]) -> l
                 raise TypeError(f"sources[{source_idx}] dataset entry must be a mapping or string")
             if isinstance(child, dict) and child.get("enabled", True) is False:
                 continue
-            specs.append(_make_spec(child, args, idx=len(specs), group_id=group_id, inherited=inherited))
+            specs.append(_make_spec(child, idx=len(specs), group_id=group_id, inherited=inherited))
     return specs
-
-
-def _load_specs(args: argparse.Namespace, config: dict[str, Any]) -> list[DatasetSpec]:
-    if args.dataset_specs_json:
-        text = args.dataset_specs_json
-        maybe_path = Path(text)
-        if maybe_path.exists():
-            text = maybe_path.read_text(encoding="utf-8")
-        raw_specs = json.loads(text)
-        return [_make_spec(item, args, idx=idx, group_id=idx) for idx, item in enumerate(raw_specs)]
-
-    source_specs = _flatten_source_specs(args, config)
-    if source_specs is not None:
-        return source_specs
-
-    mixture_specs = _flatten_mixture_specs(args, config)
-    if mixture_specs is not None:
-        return mixture_specs
-
-    if isinstance(config.get("datasets"), list):
-        return [_make_spec(item, args, idx=idx, group_id=idx) for idx, item in enumerate(config["datasets"])]
-
-    if not args.remote_root:
-        raise ValueError("provide --remote-root, --dataset-specs-json, or --dataset-config")
-    return [DatasetSpec(name=args.name, remote_root=args.remote_root, conf_path=args.conf)]
 
 
 def distributed_dataset_weights(
@@ -4555,22 +4509,9 @@ def _summarize_item(item: dict[str, Any]) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--dataset-config", type=Path, default=None, help="YAML config describing one or more remote datasets."
+        "--dataset-config", type=Path, required=True, help="YAML config describing local LeRobot datasets."
     )
-    parser.add_argument(
-        "--remote-root",
-        default=None,
-        help="Remote LeRobot dataset root, e.g. shuju:s3://ego/miaoxingyu/egodex_sharpa_flow",
-    )
-    parser.add_argument("--name", default="remote_dataset")
-    parser.add_argument("--conf", default=PETRELOSS_CONF)
-    parser.add_argument("--storage-backend", choices=["sdk", "local"], default=None)
-    parser.add_argument("--local-root", default=None, help="Local replacement for storage.local_remote_prefix.")
-    parser.add_argument(
-        "--dataset-specs-json",
-        default=None,
-        help="JSON string or path containing a list of {name, remote_root, conf_path, stats_path} specs.",
-    )
+    parser.add_argument("--local-root", default=None, help="Override storage.local_root from the YAML.")
     parser.add_argument("--index", type=int, default=0)
     parser.add_argument("--num-frames", type=int, default=None)
     parser.add_argument("--action-size", type=int, default=None)
@@ -4604,7 +4545,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--eval-exclude-from-training", choices=["none", "sample", "episode"], default=None)
     parser.add_argument(
-        "--profile", action="store_true", help="Print coarse timing breakdown for remote/local loading."
+        "--profile", action="store_true", help="Print coarse timing breakdown for local loading."
     )
     parser.add_argument("--save-summary", type=Path, default=None)
     return parser.parse_args()
@@ -4615,16 +4556,7 @@ def main() -> None:
     args = parse_args()
     _PROFILE_ENABLED = bool(args.profile)
     t_main = time.perf_counter()
-    if args.dataset_config is not None:
-        config, specs = load_dataset_specs(
-            args.dataset_config,
-            args.conf,
-            storage_backend=args.storage_backend,
-            local_root=args.local_root,
-        )
-    else:
-        config = {}
-        specs = _load_specs(args, config)
+    config, specs = load_dataset_specs(args.dataset_config, local_root=args.local_root)
     num_frames = int(_resolved_arg(args.num_frames, config, "sampling", "num_frames", 33))
     action_size = _resolved_arg(args.action_size, config, "sampling", "action_size", None)
     if action_size is not None:

@@ -6,6 +6,7 @@ export OPENPI_WORKDIR="${OPENPI_WORKDIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 export OPENPI_RUN_ROOT="${OPENPI_RUN_ROOT:-${OPENPI_WORKDIR}}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export OPENPI_NUM_WORKERS="${OPENPI_NUM_WORKERS:-16}"
+export OPENPI_CONFIG_NAME="${OPENPI_CONFIG_NAME:-pi05_abc130k}"
 export OPENPI_OVERWRITE="${OPENPI_OVERWRITE:-0}"
 export OPENPI_LOG_RANK_PHASES="${OPENPI_LOG_RANK_PHASES:-1}"
 export PYTHONUNBUFFERED=1
@@ -88,8 +89,8 @@ fi
 
 echo "[launcher] timestamp=$(date --iso-8601=seconds) host=$(hostname) pid=$$"
 echo "[launcher] workdir=${OPENPI_WORKDIR} python=${PYTHON_BIN} CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-echo "[train] run_id=${OPENPI_RUN_ID} mode=${TRAIN_MODE} steps=${OPENPI_TRAIN_STEPS} workers=${OPENPI_NUM_WORKERS}"
-echo "[train] run_dir_template=${OPENPI_RUN_ROOT}/pi05_interna1/${OPENPI_RUN_ID}_<UTC start time>"
+echo "[train] config_name=${OPENPI_CONFIG_NAME} run_id=${OPENPI_RUN_ID} mode=${TRAIN_MODE} steps=${OPENPI_TRAIN_STEPS} workers=${OPENPI_NUM_WORKERS}"
+echo "[train] run_dir_template=${OPENPI_RUN_ROOT}/${OPENPI_CONFIG_NAME}/${OPENPI_RUN_ID}_<UTC start time>"
 echo "[logging] launcher_log=${LAUNCHER_LOG_FILE}"
 
 if [[ "${OPENPI_LAUNCH_DRY_RUN:-0}" == "1" ]]; then
