@@ -227,7 +227,7 @@ normalize_bool_env OPENPI_LOCAL_VIDEO_PATH_DECODE 1
 
 if [[ "${OPENPI_PROFILE}" == "1" ]]; then
   TRAIN_MODE="profiling"
-  export OPENPI_TRAIN_STEPS="${OPENPI_TRAIN_STEPS:-120}"
+  export OPENPI_TRAIN_STEPS="${OPENPI_TRAIN_STEPS:-1000}"
 else
   TRAIN_MODE="training"
   export OPENPI_TRAIN_STEPS="${OPENPI_TRAIN_STEPS:-10000}"

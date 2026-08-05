@@ -1026,10 +1026,14 @@ def test_transformed_dataset_forwards_batch_and_epoch():
             self.epoch = epoch
 
     raw_dataset = BatchDataset()
+    raw_dataset.frame_filter_identity = "filter-identity"
+    raw_dataset.frame_filter_summary = {"enabled": True, "leaves": 2}
     dataset = data_loader.TransformedDataset(raw_dataset, [lambda sample: {"value": sample["value"] + 1}])
 
     assert [int(sample["value"]) for sample in dataset.__getitems__([0, 2])] == [1, 3]
     assert dataset.prefer_sequential_indices
     assert dataset.requires_worker_restart_each_epoch
+    assert dataset.frame_filter_identity == "filter-identity"
+    assert dataset.frame_filter_summary == {"enabled": True, "leaves": 2}
     dataset.set_epoch(7)
     assert raw_dataset.epoch == 7

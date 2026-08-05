@@ -327,6 +327,27 @@ def build_datasets(config: _config.TrainConfig):
     return data_loader, data_loader.data_config()
 
 
+def validate_distributed_frame_filter_identity(data_loader, *, use_ddp: bool) -> None:
+    """Validate the main training dataset identity exactly once on every DDP rank.
+
+    Dataset construction must not perform collectives: rank 0 may construct an extra
+    loader for W&B sample images, while the other ranks proceed to model setup.
+    """
+    identity = getattr(data_loader, "frame_filter_identity", None)
+    summary = getattr(data_loader, "frame_filter_summary", {"enabled": False})
+    enabled = bool(summary.get("enabled", False))
+    local = {"enabled": enabled, "identity": identity}
+
+    if use_ddp:
+        gathered: list[dict[str, object] | None] = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, local)
+        if any(value != local for value in gathered):
+            raise RuntimeError(f"Frame filter identity differs across DDP ranks: {gathered}")
+
+    if not use_ddp or dist.get_rank() == 0:
+        logging.info("frame_filter distributed identity validated: %s", json.dumps(local, sort_keys=True))
+
+
 def get_model_state_dict(model):
     """Get state dict from model, handling DDP wrapper."""
     return (
@@ -633,6 +654,7 @@ def _train_loop(config: _config.TrainConfig):
     # Pass the original batch size to data loader - it will handle DDP splitting internally
     log_rank_phase("building distributed dataset and DataLoader")
     loader, data_config = build_datasets(config)
+    validate_distributed_frame_filter_identity(loader, use_ddp=use_ddp)
     log_rank_phase("distributed dataset and DataLoader ready")
 
     # Log sample images to wandb on first batch

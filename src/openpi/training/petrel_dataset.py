@@ -262,12 +262,6 @@ class PetrelDataset(torch.utils.data.Dataset):
             **totals,
         }
 
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            gathered: list[str | None] = [None] * torch.distributed.get_world_size()
-            torch.distributed.all_gather_object(gathered, identity)
-            if any(value != identity for value in gathered):
-                raise RuntimeError(f"Frame filter identity differs across DDP ranks: {gathered}")
-
         self.frame_filter_identity = identity
         self.frame_filter_summary = summary
         logging.info("frame_filter %s", json.dumps(summary, ensure_ascii=False, sort_keys=True))

@@ -5,7 +5,7 @@ import multiprocessing
 import os
 import time
 import typing
-from typing import Literal, Protocol, SupportsIndex, TypeVar
+from typing import Any, Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -97,6 +97,14 @@ class TransformedDataset(Dataset[T_co]):
     @property
     def training_block_size(self) -> int:
         return int(getattr(self._dataset, "training_block_size", 1))
+
+    @property
+    def frame_filter_identity(self) -> str | None:
+        return getattr(self._dataset, "frame_filter_identity", None)
+
+    @property
+    def frame_filter_summary(self) -> dict[str, Any]:
+        return dict(getattr(self._dataset, "frame_filter_summary", {"enabled": False}))
 
 
 class ContiguousDistributedSampler(torch.utils.data.Sampler[int]):
@@ -589,6 +597,14 @@ class TorchDataLoader:
     def torch_loader(self) -> torch.utils.data.DataLoader:
         return self._data_loader
 
+    @property
+    def frame_filter_identity(self) -> str | None:
+        return getattr(self._dataset, "frame_filter_identity", None)
+
+    @property
+    def frame_filter_summary(self) -> dict[str, Any]:
+        return dict(getattr(self._dataset, "frame_filter_summary", {"enabled": False}))
+
     def __iter__(self):
         num_items = 0
         epoch = 0
@@ -705,6 +721,14 @@ class DataLoaderImpl(DataLoader):
 
     def data_config(self) -> _config.DataConfig:
         return self._data_config
+
+    @property
+    def frame_filter_identity(self) -> str | None:
+        return getattr(self._data_loader, "frame_filter_identity", None)
+
+    @property
+    def frame_filter_summary(self) -> dict[str, Any]:
+        return dict(getattr(self._data_loader, "frame_filter_summary", {"enabled": False}))
 
     def __iter__(self):
         for batch in self._data_loader:
