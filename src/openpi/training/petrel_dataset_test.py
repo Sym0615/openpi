@@ -1,6 +1,7 @@
 from collections import OrderedDict
 import dataclasses
 import pathlib
+import pickle
 from types import SimpleNamespace
 
 import numpy as np
@@ -196,6 +197,155 @@ def test_petrel_dataset_batch_decode(monkeypatch, tmp_path):
     assert dataset._datasets[0].step_item_batches == [(2, [0, 1, 2])]  # noqa: SLF001
 
 
+def test_petrel_dataset_worker_reuses_resolved_specs(monkeypatch, tmp_path):
+    config_path = tmp_path / "dataset.yaml"
+    config_path.write_text("mixture: {}", encoding="utf-8")
+    fake = _fake_reader()
+    load_calls = 0
+    original_load = fake.load_dataset_specs
+
+    def counted_load(*args, **kwargs):
+        nonlocal load_calls
+        load_calls += 1
+        return original_load(*args, **kwargs)
+
+    fake.load_dataset_specs = counted_load
+    for name, value in vars(fake).items():
+        monkeypatch.setattr(petrel_dataset.reader, name, value)
+
+    dataset = petrel_dataset.PetrelDataset(
+        petrel_dataset.PetrelDatasetConfig(dataset_config=str(config_path)),
+        action_horizon=3,
+        model_action_dim=8,
+    )
+    assert load_calls == 1
+
+    worker_state = dataset.__getstate__()
+    assert worker_state["_datasets"] is None
+    assert worker_state["_mixed_dataset"] is None
+    assert worker_state["_resolved_backend_config"] is not None
+    assert worker_state["_resolved_specs"] is not None
+
+    monkeypatch.setattr(
+        petrel_dataset.reader,
+        "load_dataset_specs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("worker must reuse resolved specs")),
+    )
+    worker_dataset = pickle.loads(pickle.dumps(dataset))
+    worker_dataset._initialize_backend()  # noqa: SLF001
+
+    assert worker_dataset._mixed_dataset is not None  # noqa: SLF001
+    assert worker_dataset._datasets is not None  # noqa: SLF001
+
+
+def _mock_distributed(monkeypatch, *, rank, broadcast_value=None, captured=None):
+    distributed = petrel_dataset.reader.torch.distributed
+    monkeypatch.setattr(distributed, "is_available", lambda: True)
+    monkeypatch.setattr(distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(distributed, "get_rank", lambda: rank)
+
+    def broadcast(payload, src):
+        assert src == 0
+        if captured is not None:
+            captured.append(payload[0])
+        if broadcast_value is not None:
+            payload[0] = broadcast_value
+
+    monkeypatch.setattr(distributed, "broadcast_object_list", broadcast)
+
+
+def test_nonzero_rank_reuses_rank0_dataset_root_validation(monkeypatch, tmp_path):
+    resolved_root = tmp_path / "mounted"
+    config = {"storage": {"local_root": "/must/not/be/touched"}}
+    spec = petrel_dataset.reader.DatasetSpec(name="dataset", remote_root="parent/dataset")
+    monkeypatch.setattr(petrel_dataset.reader, "read_openpi_petrel_config", lambda path: config)
+    monkeypatch.setattr(petrel_dataset.reader, "_flatten_source_specs", lambda value: [spec])
+    monkeypatch.setattr(
+        petrel_dataset.reader.os,
+        "scandir",
+        lambda path: (_ for _ in ()).throw(AssertionError("non-zero rank must not scan AOSS")),
+    )
+    _mock_distributed(
+        monkeypatch,
+        rank=1,
+        broadcast_value={"resolved_root": str(resolved_root), "error": None},
+    )
+
+    loaded_config, specs = petrel_dataset.reader.load_dataset_specs("unused.yaml")
+
+    assert loaded_config["storage"]["local_root"] == str(resolved_root)
+    assert specs[0].remote_root == str(resolved_root / "parent/dataset")
+    assert specs[0].local_root == str(resolved_root)
+
+
+def test_rank0_validates_dataset_roots_once_and_broadcasts(monkeypatch, tmp_path, capsys):
+    resolved_root = tmp_path / "mounted"
+    (resolved_root / "parent/dataset").mkdir(parents=True)
+    config = {"storage": {"local_root": str(resolved_root)}}
+    spec = petrel_dataset.reader.DatasetSpec(name="dataset", remote_root="parent/dataset")
+    monkeypatch.setattr(petrel_dataset.reader, "read_openpi_petrel_config", lambda path: config)
+    monkeypatch.setattr(petrel_dataset.reader, "_flatten_source_specs", lambda value: [spec])
+    original_scandir = petrel_dataset.reader.os.scandir
+    scans = []
+
+    def counted_scandir(path):
+        scans.append(path)
+        return original_scandir(path)
+
+    monkeypatch.setattr(petrel_dataset.reader.os, "scandir", counted_scandir)
+    broadcasts = []
+    _mock_distributed(monkeypatch, rank=0, captured=broadcasts)
+
+    _, specs = petrel_dataset.reader.load_dataset_specs("unused.yaml")
+
+    assert scans == [resolved_root / "parent"]
+    assert broadcasts == [{"resolved_root": str(resolved_root), "error": None}]
+    assert specs[0].remote_root == str(resolved_root / "parent/dataset")
+    output = capsys.readouterr().out
+    assert "[petrel-init][rank=0] AOSS scan started specs=1 parents=1" in output
+    assert "[petrel-init][rank=0] AOSS scan completed elapsed_s=" in output
+    assert "[petrel-init][rank=0] broadcast completed elapsed_s=" in output
+
+
+def test_rank0_broadcasts_dataset_root_validation_failure(monkeypatch, tmp_path):
+    resolved_root = tmp_path / "mounted"
+    resolved_root.mkdir()
+    config = {"storage": {"local_root": str(resolved_root)}}
+    spec = petrel_dataset.reader.DatasetSpec(name="missing", remote_root="parent/missing")
+    monkeypatch.setattr(petrel_dataset.reader, "read_openpi_petrel_config", lambda path: config)
+    monkeypatch.setattr(petrel_dataset.reader, "_flatten_source_specs", lambda value: [spec])
+    broadcasts = []
+    _mock_distributed(monkeypatch, rank=0, captured=broadcasts)
+
+    with pytest.raises(RuntimeError, match="Rank 0 dataset root validation failed: FileNotFoundError"):
+        petrel_dataset.reader.load_dataset_specs("unused.yaml")
+
+    assert len(broadcasts) == 1
+    assert broadcasts[0]["resolved_root"] is None
+    assert broadcasts[0]["error"].startswith("FileNotFoundError:")
+
+
+def test_nonzero_rank_raises_rank0_dataset_root_validation_failure(monkeypatch, tmp_path):
+    config = {"storage": {"local_root": "/must/not/be/touched"}}
+    spec = petrel_dataset.reader.DatasetSpec(name="dataset", remote_root="parent/dataset")
+    monkeypatch.setattr(petrel_dataset.reader, "read_openpi_petrel_config", lambda path: config)
+    monkeypatch.setattr(petrel_dataset.reader, "_flatten_source_specs", lambda value: [spec])
+    monkeypatch.setattr(
+        petrel_dataset.reader.os,
+        "scandir",
+        lambda path: (_ for _ in ()).throw(AssertionError("non-zero rank must not scan AOSS")),
+    )
+    _mock_distributed(
+        monkeypatch,
+        rank=1,
+        broadcast_value={"resolved_root": None, "error": "FileNotFoundError: missing dataset root"},
+    )
+
+    with pytest.raises(RuntimeError, match="Rank 0 dataset root validation failed: FileNotFoundError"):
+        petrel_dataset.reader.load_dataset_specs("unused.yaml")
+
+
 def test_petrel_episode_parquet_lru_cache_hits_and_evicts():
     dataset = object.__new__(petrel_dataset.reader.PetrelLeRobotDataset)
     dataset.name = "fake"
@@ -375,8 +525,9 @@ def test_pose_rpy_round_trip_and_delta_output_format():
     recovered = petrel_dataset.reader._rotvec_to_rpy(rotvec)  # noqa: SLF001
     torch.testing.assert_close(recovered, rpy, atol=1e-5, rtol=1e-5)
 
-    pose = torch.cat([torch.tensor([[1.0, 2.0, 3.0]]), rotvec[:1]], dim=-1)
-    formatted = petrel_dataset.reader._format_xyz_rotvec_pose(pose, "delta_xyz_rpy")  # noqa: SLF001
+    xyz = torch.tensor([[1.0, 2.0, 3.0]])
+    rotation = petrel_dataset.reader._rotvec_to_matrix(rotvec[:1])  # noqa: SLF001
+    formatted = petrel_dataset.reader._format_xyz_matrix_pose(xyz, rotation, "delta_xyz_rpy")  # noqa: SLF001
     torch.testing.assert_close(formatted, torch.tensor([[1.0, 2.0, 3.0, 0.2, -0.3, 0.4]]), atol=1e-5, rtol=1e-5)
 
 
@@ -387,18 +538,18 @@ def test_absolute_ee_target_becomes_world_translation_and_relative_rpy_delta():
         "world_from_source": "robot_to_opencv",
         "source_ee_from_canonical_ee": "identity",
     }
-    current = petrel_dataset.reader._transform_xyz_rotvec_pose(  # noqa: SLF001
-        petrel_dataset.reader._pose_to_xyz_rotvec(current_source, "xyz_rpy"),  # noqa: SLF001
+    current = petrel_dataset.reader._transform_xyz_matrix_pose(  # noqa: SLF001
+        *petrel_dataset.reader._pose_to_xyz_matrix(current_source, "xyz_rpy"),  # noqa: SLF001
         frame_transform,
         is_delta=False,
     )
-    target = petrel_dataset.reader._transform_xyz_rotvec_pose(  # noqa: SLF001
-        petrel_dataset.reader._pose_to_xyz_rotvec(target_source, "xyz_rpy"),  # noqa: SLF001
+    target = petrel_dataset.reader._transform_xyz_matrix_pose(  # noqa: SLF001
+        *petrel_dataset.reader._pose_to_xyz_matrix(target_source, "xyz_rpy"),  # noqa: SLF001
         frame_transform,
         is_delta=False,
     )
-    delta = petrel_dataset.reader._pose_delta_world_from_transformed_xyz_rotvec(current, target)  # noqa: SLF001
-    delta_rpy = petrel_dataset.reader._format_xyz_rotvec_pose(delta, "delta_xyz_rpy")  # noqa: SLF001
+    delta = petrel_dataset.reader._pose_delta_world_from_transformed_xyz_matrix(current, target)  # noqa: SLF001
+    delta_rpy = petrel_dataset.reader._format_xyz_matrix_pose(*delta, "delta_xyz_rpy")  # noqa: SLF001
 
     torch.testing.assert_close(
         delta_rpy,
@@ -438,6 +589,42 @@ def test_absolute_ee_action_chunk_uses_initial_observation_as_delta_reference():
     torch.testing.assert_close(actions[:, 0], torch.tensor([1.0, 2.0]))
 
 
+def test_absolute_ee_action_target_stays_absolute():
+    dataset = object.__new__(petrel_dataset.reader.PetrelLeRobotDataset)
+    dataset.name = "absolute_pose_target"
+    dataset.canonical_adapter = {
+        "pose_input": "xyz_rpy",
+        "action_pose_semantics": "absolute_target",
+        "action_pose_output": "xyz_rpy",
+    }
+    component = {
+        "state_key": "state_pose",
+        "action_key": "action_pose",
+        "raw_slice": [0, 6],
+        "target_action_semantics": "absolute",
+    }
+    parquet = {
+        "state_pose": torch.tensor([[0.5, 0.0, 0.0, 0.0, 0.0, 0.0]]),
+        "action_pose": torch.tensor([[1.0, 2.0, 3.0, 0.1, -0.2, 0.3]]),
+    }
+
+    actions = dataset._canonical_pose_from_component(  # noqa: SLF001
+        parquet,
+        component,
+        [0],
+        "action",
+        reference_indices=[0],
+    )
+
+    assert actions is not None
+    torch.testing.assert_close(
+        actions,
+        torch.tensor([[1.0, 2.0, 3.0, 0.1, -0.2, 0.3]]),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
 def test_grouped_norm_stats_select_sample_group_and_remove_selector():
     group_a = normalize.NormStats(mean=np.zeros(2), std=np.ones(2), q01=np.zeros(2), q99=np.ones(2))
     group_b = normalize.NormStats(mean=np.zeros(2), std=np.ones(2), q01=np.full(2, 10.0), q99=np.full(2, 20.0))
@@ -475,6 +662,37 @@ def test_grouped_norm_stats_select_sample_group_and_remove_selector():
         transforms.select_norm_stats(norm_stats, None)
 
 
+def test_grouped_norm_stats_broadcast_per_action_horizon():
+    state_stats = normalize.NormStats(
+        mean=np.zeros(2),
+        std=np.ones(2),
+        q01=np.zeros(2),
+        q99=np.ones(2),
+    )
+    action_stats = normalize.NormStats(
+        mean=np.zeros((2, 2)),
+        std=np.ones((2, 2)),
+        q01=np.asarray([[0.0, 10.0], [100.0, 1000.0]]),
+        q99=np.asarray([[10.0, 20.0], [200.0, 1100.0]]),
+    )
+    group = "dataset/abc130k"
+    data = {
+        "state": np.asarray([0.5, 1.0]),
+        "actions": np.asarray([[5.0, 15.0], [150.0, 1050.0]]),
+        "stats_group": group,
+    }
+
+    result = transforms.NormalizeByGroup(
+        {
+            transforms.grouped_norm_key("state", group): state_stats,
+            transforms.grouped_norm_key("actions", group): action_stats,
+        },
+        use_quantiles=True,
+    )(data)
+
+    np.testing.assert_allclose(result["actions"], np.zeros((2, 2)), atol=1e-6)
+
+
 def test_grouped_norm_restores_missing_control_slots_to_zero():
     stats = normalize.NormStats(
         mean=np.zeros(4),
@@ -502,13 +720,13 @@ def test_grouped_norm_restores_missing_control_slots_to_zero():
     np.testing.assert_array_equal(result["actions_dim_is_pad"], np.asarray([False, True, False, True]))
 
 
-def test_dataset_config_owns_cache_templates_and_three_level_norm_groups():
+def test_dataset_config_owns_cache_templates_and_dataset_norm_group():
     config = petrel_dataset.reader.read_openpi_petrel_config("configs/petrel/pi05_interna1.yaml")
     profile = config["embodiments"]["a1_single_ee"]
 
     assert "local_meta_dir_template" not in profile
     assert "path_index_dir_template" not in profile
-    assert profile["stats_group_template"] == "profile/{dataset_id}/{robot_id}"
+    assert profile["stats_group_template"] is None
     assert config["cache_templates"]["local_meta_dir"].endswith("data/petrel_cache/meta/{dataset_id}/{remote}")
     assert config["cache_templates"]["path_index_dir"].endswith("data/petrel_cache/path_index/{dataset_id}/{remote}")
 
@@ -519,17 +737,14 @@ def test_dataset_config_owns_cache_templates_and_three_level_norm_groups():
     spec = next(item for item in specs if item.source_name == "a1_articulation_franka")
     assert spec.local_meta_dir.endswith(f"data/petrel_cache/meta/intern_a1/{spec.remote_root}")
     assert spec.path_index_dir.endswith(f"data/petrel_cache/path_index/intern_a1/{spec.remote_root}")
-    assert spec.stats_group == "profile/intern_a1/franka"
-    assert spec.stats_group_fallbacks == ("dataset/intern_a1",)
+    assert spec.stats_group == "dataset/intern_a1"
+    assert spec.stats_group_fallbacks == ()
 
     source["stats_group_template"] = "task/{dataset_id}/{source}/{name}"
     task_specs = petrel_dataset.reader._flatten_source_specs(config)  # noqa: SLF001
     task_spec = next(item for item in task_specs if item.source_name == "a1_articulation_franka")
     assert task_spec.stats_group == f"task/intern_a1/a1_articulation_franka/{task_spec.name}"
-    assert task_spec.stats_group_fallbacks == (
-        "profile/intern_a1/franka",
-        "dataset/intern_a1",
-    )
+    assert task_spec.stats_group_fallbacks == ("dataset/intern_a1",)
 
 
 def test_reader_exposes_only_local_file_client():
@@ -695,29 +910,30 @@ def test_pi05_petrel_legacy_config_is_rejected_until_mapped_migration():
 
 
 def test_pi05_interna1_yaml_only_expands_intern_a1():
-    config, specs = petrel_dataset.reader.load_dataset_specs("configs/petrel/pi05_interna1.yaml")
+    config = petrel_dataset.reader.read_openpi_petrel_config("configs/petrel/pi05_interna1.yaml")
+    specs = petrel_dataset.reader._flatten_source_specs(config)  # noqa: SLF001
 
     assert config["dataset_id"] == "intern_a1"
     assert config["openpi"]["control_projection"] == "mapped"
     assert config["dataset_weights"]["source_files"] == {"intern_a1": 1.0}
     assert set(config["embodiments"]) == {"a1_single_ee", "a1_dual_ee", "a1_dual7_ee"}
     assert specs
-    assert {spec.stats_group for spec in specs} == {
-        "profile/intern_a1/franka",
-        "profile/intern_a1/lift2",
-        "profile/intern_a1/split_aloha",
-        "profile/intern_a1/acone",
-        "profile/intern_a1/genie1",
-    }
-    assert {spec.stats_group_fallbacks for spec in specs} == {("dataset/intern_a1",)}
+    assert {spec.stats_group for spec in specs} == {"dataset/intern_a1"}
+    assert {spec.stats_group_fallbacks for spec in specs} == {()}
     assert {source["_source_file"] for source in config["sources"]} == {"intern_a1"}
+    assert config["canonical_action_space"]["action_semantics"] == {
+        "joint": "absolute",
+        "gripper": "absolute",
+        "ee": "delta",
+    }
 
     single_profile = config["embodiments"]["a1_single_ee"]["canonical_adapter"]
-    assert single_profile["slots"]["right"]["ee"]["state_key"] == "states.tcp_to_robot_pose"
+    assert set(single_profile["slots"]["right"]) == {"joint", "gripper"}
     assert single_profile["slots"]["right"]["joint"]["state_target_indices"] == [7, 8, 9, 10, 11, 12, 27]
-    assert single_profile["slots"]["right"]["ee"]["state_target_indices"] == [20, 21, 22, 23, 24, 25]
 
     dual7_profile = config["embodiments"]["a1_dual7_ee"]["canonical_adapter"]
+    assert set(dual7_profile["slots"]["left"]) == {"joint", "gripper"}
+    assert set(dual7_profile["slots"]["right"]) == {"joint", "gripper"}
     assert dual7_profile["slots"]["left"]["joint"]["state_target_indices"] == [0, 1, 2, 3, 4, 5, 26]
     assert dual7_profile["slots"]["right"]["joint"]["state_target_indices"] == [7, 8, 9, 10, 11, 12, 27]
 
@@ -846,6 +1062,24 @@ def test_pi05_abc130k_config_and_manifest():
         "observation.images.left_wrist_camera": "left_wrist_0_rgb",
         "observation.images.right_wrist_camera": "right_wrist_0_rgb",
     }
+
+
+def test_pi05_abc130k_debug_uses_local_mount_and_separate_assets():
+    from openpi.training import config as training_config
+
+    train_config = training_config.get_config("pi05_abc130k_debug")
+    translated = petrel_dataset.reader.read_openpi_petrel_config("configs/petrel/pi05_abc130k.yaml")
+
+    assert train_config.data.repo_id == "abc130k"
+    assert train_config.model.action_horizon == 30
+    # The debug variant reuses the shared YAML and only overrides the mount point.
+    assert train_config.data.dataset.dataset_config == "configs/petrel/pi05_abc130k.yaml"
+    assert train_config.data.dataset.local_root == "/oss/datahub/public/real/ABC-130K-v3/train"
+    assert train_config.pytorch_weight_path == "/oss/datahub/public/model/pi05_base_pytorch_bf16"
+    assert translated["mixture"]["training_block_size"] == 1
+    assert train_config.assets_dirs / train_config.data.repo_id == (
+        pathlib.Path.cwd() / "assets/pi05_abc130k_debug/abc130k"
+    )
 
 
 def test_frame_filter_limits_windows_without_subtask_segments():

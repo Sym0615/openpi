@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export OPENPI_WORKDIR="${OPENPI_WORKDIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 export OPENPI_RUN_ROOT="${OPENPI_RUN_ROOT:-${OPENPI_WORKDIR}}"
 export PYTHONPATH="${OPENPI_WORKDIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
-export CHECKPINTS_ROOT="${OPENPI_RUN_ROOT}/checkpoints"
+export OPENPI_CHECKPOINTS_ROOT="${OPENPI_CHECKPOINTS_ROOT:-${OPENPI_RUN_ROOT}/checkpoints}"
 
 # Multi-node SSP jobs inject WORLD_SIZE and rendezvous variables. A single-node
 # GPU job may inject none of them, so default that case to one local node.
@@ -33,8 +33,9 @@ resolve_node_rank() {
 }
 
 BOOTSTRAP_NODE_RANK="$(resolve_node_rank)"
-BOOTSTRAP_RUN_SOURCE="${OPENPI_RUN_ID:-interna1_${MASTER_ADDR:-unknown}_${MASTER_PORT:-unknown}}"
+BOOTSTRAP_RUN_SOURCE="${OPENPI_RUN_ID:-abc130k_${MASTER_ADDR:-unknown}_${MASTER_PORT:-unknown}}"
 BOOTSTRAP_RUN_ID="$(printf '%s' "${BOOTSTRAP_RUN_SOURCE}" | tr -cs '[:alnum:]_.-' '_')"
+export OPENPI_RUN_ID="${OPENPI_RUN_ID:-${BOOTSTRAP_RUN_ID}}"
 LOG_ROOT="${OPENPI_LOG_ROOT:-${OPENPI_RUN_ROOT}/runs/distributed_logs}"
 BOOTSTRAP_LOG_DIR="${LOG_ROOT}/${BOOTSTRAP_RUN_ID}/node_${BOOTSTRAP_NODE_RANK}"
 mkdir -p "${BOOTSTRAP_LOG_DIR}"
@@ -91,12 +92,19 @@ GPU count in the Kubernetes task specification. The same command is executed
 on every node with node-specific WORLD_SIZE and RANK values.
 
 Optional training variables:
-  OPENPI_CONFIG_NAME, OPENPI_RUN_ID, OPENPI_LOCAL_BATCH_SIZE, OPENPI_TRAIN_STEPS, OPENPI_NUM_WORKERS,
+  OPENPI_CONFIG_NAME, OPENPI_RUN_ID, OPENPI_LOCAL_BATCH_SIZE, OPENPI_TRAIN_STEPS,
+  OPENPI_GRADIENT_ACCUMULATION_STEPS,
+  OPENPI_NUM_WORKERS,
   OPENPI_WORKER_BATCH_SIZE, OPENPI_PREFETCH_FACTOR, OPENPI_DATALOADER_IN_ORDER,
   OPENPI_PIN_MEMORY, OPENPI_DATALOADER_PREWARM,
+  OPENPI_STREAMING_ACCUMULATION, OPENPI_ASYNC_QUEUE_SIZE,
+  OPENPI_ZERO_OPTIMIZER,
   OPENPI_LOCAL_VIDEO_PATH_DECODE,
   OPENPI_SAVE_INTERVAL, OPENPI_PROFILE, OPENPI_TORCH_TRACE, OPENPI_RESUME,
-  OPENPI_OVERWRITE, OPENPI_WANDB, OPENPI_RUN_ROOT, OPENPI_WEIGHT_PATH,
+  OPENPI_OVERWRITE, OPENPI_WANDB, OPENPI_RUN_ROOT, OPENPI_CHECKPOINTS_ROOT,
+  OPENPI_WEIGHT_PATH,
+  OPENPI_BF16_AUTOCAST, OPENPI_COMPILE_TRANSFORMER_LAYERS,
+  OPENPI_GRADIENT_CHECKPOINTING,
   OPENPI_LOG_ROOT, OPENPI_LOG_ALL_RANKS, OPENPI_LOG_RANK_PHASES,
   OPENPI_GPUS_PER_NODE, OPENPI_NUM_NODES, OPENPI_LAUNCH_DRY_RUN.
 
@@ -108,7 +116,7 @@ Profiling defaults to 120 steps; normal training defaults to 10000 steps.
 OPENPI_TORCH_TRACE is only valid when profiling is enabled.
 
 Checkpoints and profiling outputs share this timestamped run directory:
-  <OPENPI_RUN_ROOT>/<OPENPI_CONFIG_NAME>/<OPENPI_RUN_ID>_<UTC start time>/
+  <OPENPI_CHECKPOINTS_ROOT>/<OPENPI_CONFIG_NAME>/<OPENPI_RUN_ID>_<UTC start time>/
 EOF
 }
 
@@ -184,11 +192,23 @@ fi
 
 GLOBAL_WORLD_SIZE=$((NUM_NODES * GPUS_PER_NODE))
 GLOBAL_BATCH_SIZE=$((GLOBAL_WORLD_SIZE * LOCAL_BATCH_SIZE))
+GRADIENT_ACCUMULATION_STEPS="${OPENPI_GRADIENT_ACCUMULATION_STEPS:-1}"
+
+if [[ ! "${GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "OPENPI_GRADIENT_ACCUMULATION_STEPS must be a positive integer, got: ${GRADIENT_ACCUMULATION_STEPS}" >&2
+  exit 2
+fi
+EFFECTIVE_GLOBAL_BATCH_SIZE=$((GLOBAL_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS))
+EFFECTIVE_LOCAL_BATCH_SIZE=$((LOCAL_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS))
 
 export OPENPI_BATCH_SIZE="${GLOBAL_BATCH_SIZE}"
+export OPENPI_GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS}"
 export OPENPI_NUM_WORKERS="${OPENPI_NUM_WORKERS:-16}"
 export OPENPI_WORKER_BATCH_SIZE="${OPENPI_WORKER_BATCH_SIZE:-16}"
 export OPENPI_PREFETCH_FACTOR="${OPENPI_PREFETCH_FACTOR:-2}"
+export OPENPI_STREAMING_ACCUMULATION="${OPENPI_STREAMING_ACCUMULATION:-0}"
+export OPENPI_ASYNC_QUEUE_SIZE="${OPENPI_ASYNC_QUEUE_SIZE:-0}"
+export OPENPI_ZERO_OPTIMIZER="${OPENPI_ZERO_OPTIMIZER:-0}"
 export OPENPI_OVERWRITE="${OPENPI_OVERWRITE:-0}"
 export OPENPI_DISTRIBUTED=1
 export OPENPI_LOG_ALL_RANKS="${OPENPI_LOG_ALL_RANKS:-0}"
@@ -199,9 +219,8 @@ export TORCH_DISTRIBUTED_DEBUG="${TORCH_DISTRIBUTED_DEBUG:-INFO}"
 export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
 export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
 export NCCL_DEBUG_SUBSYS="${NCCL_DEBUG_SUBSYS:-INIT,ENV,NET}"
-export OPENPI_WANDB=1 
-export WANDB_API_KEY="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"
-export WANDB_MODE=online 
+export OPENPI_WANDB="${OPENPI_WANDB:-1}"
+export WANDB_MODE="${WANDB_MODE:-online}"
 
 normalize_bool_env() {
   local variable_name="$1"
@@ -223,7 +242,17 @@ normalize_bool_env OPENPI_TORCH_TRACE 0
 normalize_bool_env OPENPI_DATALOADER_IN_ORDER 0
 normalize_bool_env OPENPI_PIN_MEMORY 0
 normalize_bool_env OPENPI_DATALOADER_PREWARM 1
+normalize_bool_env OPENPI_STREAMING_ACCUMULATION 0
+normalize_bool_env OPENPI_ZERO_OPTIMIZER 0
 normalize_bool_env OPENPI_LOCAL_VIDEO_PATH_DECODE 1
+normalize_bool_env OPENPI_BF16_AUTOCAST 0
+normalize_bool_env OPENPI_COMPILE_TRANSFORMER_LAYERS 0
+normalize_bool_env OPENPI_GRADIENT_CHECKPOINTING 0
+
+if [[ "${OPENPI_ZERO_OPTIMIZER}" == "1" && "${GLOBAL_WORLD_SIZE}" -lt 2 ]]; then
+  echo "OPENPI_ZERO_OPTIMIZER=1 requires at least two distributed ranks" >&2
+  exit 2
+fi
 
 if [[ "${OPENPI_PROFILE}" == "1" ]]; then
   TRAIN_MODE="profiling"
@@ -241,7 +270,6 @@ if [[ ! "${OPENPI_TRAIN_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "OPENPI_TRAIN_STEPS must be a positive integer, got: ${OPENPI_TRAIN_STEPS}" >&2
   exit 2
 fi
-
 if [[ ! "${OPENPI_NUM_WORKERS}" =~ ^[0-9]+$ ]]; then
   echo "OPENPI_NUM_WORKERS must be a non-negative integer, got: ${OPENPI_NUM_WORKERS}" >&2
   exit 2
@@ -254,8 +282,17 @@ if [[ ! "${OPENPI_PREFETCH_FACTOR}" =~ ^[1-9][0-9]*$ ]]; then
   echo "OPENPI_PREFETCH_FACTOR must be a positive integer, got: ${OPENPI_PREFETCH_FACTOR}" >&2
   exit 2
 fi
-if (( LOCAL_BATCH_SIZE % OPENPI_WORKER_BATCH_SIZE != 0 )); then
-  echo "OPENPI_LOCAL_BATCH_SIZE (${LOCAL_BATCH_SIZE}) must be divisible by OPENPI_WORKER_BATCH_SIZE (${OPENPI_WORKER_BATCH_SIZE})." >&2
+if [[ ! "${OPENPI_ASYNC_QUEUE_SIZE}" =~ ^[0-9]+$ ]]; then
+  echo "OPENPI_ASYNC_QUEUE_SIZE must be a non-negative integer, got: ${OPENPI_ASYNC_QUEUE_SIZE}" >&2
+  exit 2
+fi
+if [[ "${OPENPI_STREAMING_ACCUMULATION}" == "1" ]]; then
+  DATALOADER_LOCAL_BATCH_SIZE="${LOCAL_BATCH_SIZE}"
+else
+  DATALOADER_LOCAL_BATCH_SIZE="${EFFECTIVE_LOCAL_BATCH_SIZE}"
+fi
+if (( DATALOADER_LOCAL_BATCH_SIZE % OPENPI_WORKER_BATCH_SIZE != 0 )); then
+  echo "Local DataLoader batch (${DATALOADER_LOCAL_BATCH_SIZE}) must be divisible by OPENPI_WORKER_BATCH_SIZE (${OPENPI_WORKER_BATCH_SIZE})." >&2
   exit 2
 fi
 
@@ -290,10 +327,13 @@ echo "[launcher] workdir=${OPENPI_WORKDIR} python=${PYTHON_BIN}"
 echo "[topology] nnodes=${NUM_NODES} gpus_per_node=${GPUS_PER_NODE} node_rank=${NODE_RANK}"
 echo "[topology] master=${MASTER_ADDR}:${MASTER_PORT}"
 echo "[topology] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-echo "[train] global_world_size=${GLOBAL_WORLD_SIZE} global_batch_size=${GLOBAL_BATCH_SIZE} local_batch_size=${LOCAL_BATCH_SIZE}"
-echo "[train] config_name=${OPENPI_CONFIG_NAME} run_id=${OPENPI_RUN_ID} workers_per_rank=${OPENPI_NUM_WORKERS} checkpoint_root=${OPENPI_RUN_ROOT}"
-echo "[train] run_dir_template=${OPENPI_RUN_ROOT}/${OPENPI_CONFIG_NAME}/${OPENPI_RUN_ID}_<UTC start time>"
+echo "[train] global_world_size=${GLOBAL_WORLD_SIZE} physical_global_batch_size=${GLOBAL_BATCH_SIZE} physical_local_batch_size=${LOCAL_BATCH_SIZE} effective_global_batch_size=${EFFECTIVE_GLOBAL_BATCH_SIZE} effective_local_batch_size=${EFFECTIVE_LOCAL_BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS}"
+echo "[train] dataloader_local_batch_size=${DATALOADER_LOCAL_BATCH_SIZE} streaming_accumulation=${OPENPI_STREAMING_ACCUMULATION} async_queue_size=${OPENPI_ASYNC_QUEUE_SIZE}"
+echo "[train] config_name=${OPENPI_CONFIG_NAME} run_id=${OPENPI_RUN_ID} workers_per_rank=${OPENPI_NUM_WORKERS} checkpoint_root=${OPENPI_CHECKPOINTS_ROOT}"
+echo "[train] run_dir_template=${OPENPI_CHECKPOINTS_ROOT}/${OPENPI_CONFIG_NAME}/${OPENPI_RUN_ID}_<UTC start time>"
 echo "[train] mode=${TRAIN_MODE} steps=${OPENPI_TRAIN_STEPS} profiling=${OPENPI_PROFILE} torch_trace=${OPENPI_TORCH_TRACE}"
+echo "[train] distributed_strategy=ddp zero_optimizer=${OPENPI_ZERO_OPTIMIZER}"
+echo "[train] attention=sdpa gradient_checkpointing=${OPENPI_GRADIENT_CHECKPOINTING} bf16_autocast=${OPENPI_BF16_AUTOCAST} compile_transformer_layers=${OPENPI_COMPILE_TRANSFORMER_LAYERS}"
 echo "[logging] torchrun_log_dir=${TORCHRUN_LOG_DIR} tee=stdout+stderr all_ranks"
 echo "[logging] TORCH_DISTRIBUTED_DEBUG=${TORCH_DISTRIBUTED_DEBUG} NCCL_DEBUG=${NCCL_DEBUG} NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS}"
 

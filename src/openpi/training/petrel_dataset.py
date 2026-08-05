@@ -120,6 +120,8 @@ class PetrelDataset(torch.utils.data.Dataset):
         self._camera_key_map: dict[str, str] = {}
         self._datasets: list[Any] | None = None
         self._mixed_dataset: Any | None = None
+        self._resolved_backend_config: Mapping[str, Any] | None = None
+        self._resolved_specs: list[Any] | None = None
         self._length: int | None = None
         self._epoch = 0
         self.prefer_sequential_indices = False
@@ -135,23 +137,28 @@ class PetrelDataset(torch.utils.data.Dataset):
 
         loader = reader
         config_path = Path(self.config.dataset_config).expanduser()  # "configs/petrel/pi05_xxx.yaml"
-        raw_config, specs = loader.load_dataset_specs(config_path, local_root=self.config.local_root)
+        if self._resolved_backend_config is None or self._resolved_specs is None:
+            raw_config, specs = loader.load_dataset_specs(config_path, local_root=self.config.local_root)
+            self._resolved_backend_config = raw_config
+            self._resolved_specs = list(specs)
+        else:
+            raw_config = self._resolved_backend_config
+            specs = self._resolved_specs
         self._validate_openpi_contract(raw_config)
         if not specs:
             raise ValueError(f"Petrel dataset config expanded to no datasets: {config_path}")
 
-        storage_cfg = raw_config.get("storage", {}) if isinstance(raw_config.get("storage"), dict) else {}
         sampling_cfg = raw_config.get("sampling", {}) if isinstance(raw_config.get("sampling"), dict) else {}
-        parquet_cache_size = int(storage_cfg.get("parquet_cache_size", 8))
+        storage_options = loader.parquet_storage_options(raw_config)
         datasets = [
             loader.PetrelLeRobotDataset(
                 spec,
                 num_frames=int(sampling_cfg["num_frames"]),
                 action_size=self.action_horizon,
                 global_sample_stride=int(sampling_cfg["global_sample_stride"]),
-                parquet_cache_size=parquet_cache_size,
                 use_path_index_cache=True,
                 local_video_path_decode=self.config.local_video_path_decode,
+                **storage_options,
             )
             for spec in specs
         ]
@@ -552,8 +559,7 @@ class PetrelDataset(torch.utils.data.Dataset):
                     _profiling.record("petrel.batch.frame_conversion", time.perf_counter() - phase_started)
             phase_started = time.perf_counter()
             packed_items = [
-                self._pack_item(item, images)
-                for item, images in zip(loaded_items, images_by_position, strict=True)
+                self._pack_item(item, images) for item, images in zip(loaded_items, images_by_position, strict=True)
             ]
             _profiling.record("petrel.batch.pack", time.perf_counter() - phase_started)
             _profiling.record("petrel.batch.total", time.perf_counter() - batch_started)

@@ -23,6 +23,7 @@ Multi-Node Training:
 
 """
 
+from contextlib import nullcontext
 import dataclasses
 import datetime
 import gc
@@ -32,9 +33,11 @@ import logging
 import os
 from pathlib import Path
 import platform
+import queue
 import re
 import shutil
 import sys
+import threading
 import time
 
 import jax
@@ -115,10 +118,216 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, enabled: bool = T
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
 
+def log_camera_views(observation, *, step: int, max_samples: int = 5) -> None:
+    """Log one real training batch's camera streams to W&B.
+
+    This is the only check that shows which decoded camera stream lands in which
+    model image slot, so it has to run in multi-GPU jobs too. It reads the batch
+    the training step is about to consume instead of building a second Petrel
+    DataLoader, whose rank-0 metadata broadcast would reorder DDP collectives.
+    """
+    images = list(observation.images.values())
+    if not images:
+        return
+    previews = []
+    for index in range(min(max_samples, images[0].shape[0])):
+        # Concatenate every camera slot horizontally, NCHW -> NHWC for wandb.
+        preview = torch.cat([image[index].permute(1, 2, 0) for image in images], dim=1)
+        previews.append(wandb.Image(preview.detach().float().cpu().numpy()))
+    wandb.log({"camera_views": previews}, step=step)
+    logging.info("Logged %d camera preview(s) covering %d image slot(s)", len(previews), len(images))
+
+
+def env_bool(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value, got {value!r}")
+
+
+def training_optimization_config() -> dict[str, object]:
+    return {
+        "bf16_autocast": env_bool("OPENPI_BF16_AUTOCAST", default=False),
+        "compile_transformer_layers": env_bool("OPENPI_COMPILE_TRANSFORMER_LAYERS", default=False),
+        # Off by default: the validated ABC-130K profile trains without it and
+        # pays no recomputation cost. Turn it on to recover activation memory.
+        "gradient_checkpointing": env_bool("OPENPI_GRADIENT_CHECKPOINTING", default=False),
+    }
+
+
+def zero_optimizer_enabled() -> bool:
+    """Return whether DDP should shard optimizer state with ZeRO Stage 1."""
+    return env_bool("OPENPI_ZERO_OPTIMIZER", default=False)
+
+
+def validate_zero_optimizer_configuration(*, enabled: bool, world_size: int) -> None:
+    if not enabled:
+        return
+    if world_size < 2:
+        raise ValueError("OPENPI_ZERO_OPTIMIZER=1 requires at least two distributed ranks")
+
+
+def trainable_indices_by_dtype(parameters) -> dict[str, list[int]]:
+    """Bucket trainable parameters by dtype, keeping each one's plain-AdamW index."""
+    indices: dict[str, list[int]] = {}
+    for global_index, parameter in enumerate(parameters):
+        if parameter.requires_grad:
+            indices.setdefault(str(parameter.dtype), []).append(global_index)
+    return indices
+
+
+def flatten_dtype_partitioned_state(
+    partials_by_dtype: dict[str, dict],
+    global_indices_by_dtype: dict[str, list[int]],
+) -> dict[str, object]:
+    """Merge per-dtype optimizer shards into the flat layout plain AdamW speaks."""
+    state: dict[int, object] = {}
+    hyperparameters: dict[str, object] | None = None
+    params: list[int] = []
+    for dtype, partial in partials_by_dtype.items():
+        global_indices = global_indices_by_dtype[dtype]
+        for group in partial["param_groups"]:
+            if hyperparameters is None:
+                hyperparameters = {key: value for key, value in group.items() if key != "params"}
+            params.extend(global_indices[int(local_index)] for local_index in group["params"])
+        for local_index, value in partial["state"].items():
+            state[global_indices[int(local_index)]] = value
+    return {
+        "state": dict(sorted(state.items())),
+        "param_groups": [{**(hyperparameters or {}), "params": sorted(params)}],
+    }
+
+
+class DtypePartitionedZeroOptimizer:
+    """Present one optimizer interface over one ZeRO-1 shard per parameter dtype.
+
+    PyTorch's ``ZeroRedundancyOptimizer`` rejects models whose parameters mix
+    dense dtypes. PI0.5 intentionally keeps most weights in BF16 while a small
+    subset remains FP32, so each dtype needs an independent ZeRO-1 instance.
+    The wrapper keeps the training loop and checkpoint format atomic.
+
+    ``state_dict``/``load_state_dict`` speak the same flat layout plain AdamW
+    uses, so ``--resume`` keeps working when ``OPENPI_ZERO_OPTIMIZER`` is
+    flipped between runs.
+    """
+
+    def __init__(
+        self,
+        optimizers_by_dtype: dict[str, torch.optim.Optimizer],
+        global_param_indices: dict[str, list[int]],
+    ):
+        if not optimizers_by_dtype:
+            raise ValueError("ZeRO-1 requires at least one trainable parameter")
+        missing = set(optimizers_by_dtype) - set(global_param_indices)
+        if missing:
+            raise ValueError(f"ZeRO-1 wrapper is missing global parameter indices for {sorted(missing)}")
+        self.optimizers_by_dtype = dict(sorted(optimizers_by_dtype.items()))
+        self.global_param_indices = {dtype: list(global_param_indices[dtype]) for dtype in self.optimizers_by_dtype}
+
+    @property
+    def param_groups(self) -> list[dict]:
+        # Read through to the wrapped optimizers on every access.
+        # ``torch.optim.Optimizer.load_state_dict`` rebinds its group dicts, so a
+        # list captured at construction would go stale after a resume and the LR
+        # schedule would silently write into orphaned dicts.
+        return [
+            param_group for optimizer in self.optimizers_by_dtype.values() for param_group in optimizer.param_groups
+        ]
+
+    def zero_grad(self, *, set_to_none: bool = True) -> None:
+        for optimizer in self.optimizers_by_dtype.values():
+            optimizer.zero_grad(set_to_none=set_to_none)
+
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for optimizer in self.optimizers_by_dtype.values():
+            optimizer.step()
+        return loss
+
+    def consolidate_state_dict(self, *, to: int = 0) -> None:
+        for optimizer in self.optimizers_by_dtype.values():
+            optimizer.consolidate_state_dict(to=to)
+
+    def state_dict(self) -> dict[str, object]:
+        return flatten_dtype_partitioned_state(
+            {dtype: optimizer.state_dict() for dtype, optimizer in self.optimizers_by_dtype.items()},
+            self.global_param_indices,
+        )
+
+    def load_state_dict(self, state_dict: dict[str, object]) -> None:
+        if "state" not in state_dict or "param_groups" not in state_dict:
+            raise ValueError(f"Unrecognized optimizer checkpoint layout: keys={sorted(state_dict)}")
+
+        groups = state_dict["param_groups"]
+        if len(groups) != 1:
+            raise ValueError(f"ZeRO-1 resume expects a single flat parameter group, got {len(groups)}")
+        hyperparameters = {key: value for key, value in groups[0].items() if key != "params"}
+        flat_state = {int(index): value for index, value in state_dict["state"].items()}
+        for dtype, optimizer in self.optimizers_by_dtype.items():
+            global_indices = self.global_param_indices[dtype]
+            optimizer.load_state_dict(
+                {
+                    "state": {
+                        local_index: flat_state[global_index]
+                        for local_index, global_index in enumerate(global_indices)
+                        if global_index in flat_state
+                    },
+                    "param_groups": [{**hyperparameters, "params": list(range(len(global_indices)))}],
+                }
+            )
+
+def create_optimizer(
+    parameters,
+    *,
+    config: _config.TrainConfig,
+    world_size: int,
+) -> torch.optim.Optimizer:
+    """Build AdamW, optionally sharding its state across DDP ranks."""
+    use_zero1 = zero_optimizer_enabled()
+    validate_zero_optimizer_configuration(enabled=use_zero1, world_size=world_size)
+    kwargs = {
+        "lr": config.lr_schedule.peak_lr,
+        "betas": (config.optimizer.b1, config.optimizer.b2),
+        "eps": config.optimizer.eps,
+        "weight_decay": config.optimizer.weight_decay,
+    }
+    parameters = list(parameters)
+    if not use_zero1:
+        return torch.optim.AdamW(parameters, **kwargs)
+
+    # Import lazily so spawned DataLoader workers do not pay the distributed
+    # optimizer import cost while bootstrapping. Stage 1 keeps DDP parameters
+    # and gradients replicated but partitions AdamW state across ranks.
+    from torch.distributed.optim import ZeroRedundancyOptimizer
+
+    # Record each shard's position in the plain-AdamW parameter order so the
+    # checkpoint this wrapper writes stays interchangeable with a non-ZeRO run.
+    global_param_indices = trainable_indices_by_dtype(parameters)
+    optimizers_by_dtype = {
+        dtype: ZeroRedundancyOptimizer(
+            [parameters[index] for index in indices],
+            optimizer_class=torch.optim.AdamW,
+            parameters_as_bucket_view=False,
+            overlap_with_ddp=False,
+            **kwargs,
+        )
+        for dtype, indices in sorted(global_param_indices.items())
+    }
+    return DtypePartitionedZeroOptimizer(optimizers_by_dtype, global_param_indices)
+
+
 def setup_ddp():
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    use_ddp = world_size > 1
-    if use_ddp and not torch.distributed.is_initialized():
+    use_distributed = world_size > 1
+    if use_distributed and not torch.distributed.is_initialized():
         os.environ.setdefault("TORCH_DISTRIBUTED_DEBUG", "INFO")
         os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
         backend = "nccl" if torch.cuda.is_available() else "gloo"
@@ -148,7 +357,7 @@ def setup_ddp():
         f"device setup complete device={device} cuda_available={torch.cuda.is_available()} "
         f"visible_cuda_devices={torch.cuda.device_count()}"
     )
-    return use_ddp, local_rank, device
+    return use_distributed, local_rank, device
 
 
 def cleanup_ddp():
@@ -259,6 +468,7 @@ def aggregate_profile_values(
         "backward_ms",
         "optimizer_ms",
         "step_ms",
+        "data_queue_depth",
         "samples_per_second",
     )
     values = torch.tensor([float(local_values[key]) for key in keys], dtype=torch.float64, device=device)
@@ -274,6 +484,7 @@ def aggregate_profile_values(
     for index, key in enumerate(keys[:-1]):
         result[f"{key}_avg"] = sums[index].item() / world_size
         result[f"{key}_max"] = maxima[index].item()
+        result[f"{key}_min"] = minima[index].item()
     throughput_index = len(keys) - 1
     result["samples_per_second_effective"] = local_batch_size * world_size / max(result["step_ms_max"] / 1000.0, 1e-9)
     result["samples_per_second_sum_rank_rates"] = sums[throughput_index].item()
@@ -368,7 +579,13 @@ def get_model_parameters(model):
 
 def save_checkpoint(model, optimizer, global_step, config, is_main, data_config):
     """Save a checkpoint with model state, optimizer state, and metadata."""
-    if not is_main or not checkpoint_due(global_step, config):
+    if not checkpoint_due(global_step, config):
+        return
+    if isinstance(optimizer, DtypePartitionedZeroOptimizer):
+        # This collective must run on every rank. Only rank 0 receives the full
+        # CPU optimizer state and proceeds with the existing atomic save path.
+        optimizer.consolidate_state_dict(to=0)
+    if not is_main:
         return
 
     # Create temporary directory for atomic checkpoint saving
@@ -453,7 +670,11 @@ def load_checkpoint(model, optimizer, checkpoint_dir, device):
         optimizer_path = ckpt_dir / "optimizer.pt"
 
         if optimizer_path.exists():
-            optimizer_state_dict = torch.load(optimizer_path, map_location=device, weights_only=False)
+            optimizer_state_dict = torch.load(
+                optimizer_path,
+                map_location="cpu" if isinstance(optimizer, DtypePartitionedZeroOptimizer) else device,
+                weights_only=False,
+            )
             logging.info("Loaded optimizer state from pt format")
         else:
             raise FileNotFoundError(f"No optimizer checkpoint found at {ckpt_dir}")
@@ -526,7 +747,7 @@ def log_memory_usage(device, step, phase="unknown"):
 
 def start_cuda_phase(
     name: str,
-    events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]],
+    events: dict[str, list[tuple[torch.cuda.Event, torch.cuda.Event]]],
     *,
     profiling_enabled: bool,
     device: torch.device,
@@ -536,26 +757,192 @@ def start_cuda_phase(
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         start_event.record()
-        events[name] = (start_event, end_event)
+        events.setdefault(name, []).append((start_event, end_event))
     return cpu_started
 
 
 def end_cuda_phase(
-    name: str, cpu_started: float, events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]]
+    name: str, cpu_started: float, events: dict[str, list[tuple[torch.cuda.Event, torch.cuda.Event]]]
 ) -> float:
     if name in events:
-        events[name][1].record()
+        events[name][-1][1].record()
     return (time.perf_counter() - cpu_started) * 1000.0
 
 
+def gradient_accumulation_context(
+    model: torch.nn.Module,
+    micro_step: int,
+    accumulation_steps: int,
+):
+    """Suppress distributed gradient synchronization before the final microbatch."""
+    is_early_microbatch = micro_step < accumulation_steps - 1
+    if is_early_microbatch and hasattr(model, "no_sync"):
+        return model.no_sync()
+    return nullcontext()
+
+
+def data_loader_global_batch_size(
+    physical_global_batch_size: int,
+    accumulation_steps: int,
+    *,
+    streaming_accumulation: bool = False,
+) -> int:
+    """Return the global batch produced by each DataLoader fetch.
+
+    The legacy path assembles the entire effective batch before the GPU can
+    start. Streaming accumulation instead returns one physical micro-batch at
+    a time so later data preparation overlaps with forward/backward work.
+    """
+    if streaming_accumulation:
+        return physical_global_batch_size
+    return physical_global_batch_size * accumulation_steps
+
+
+def split_effective_batch(observation, actions: torch.Tensor, microbatch_size: int, accumulation_steps: int):
+    """Split one host-side effective batch into fixed-size training microbatches."""
+    expected_batch_size = microbatch_size * accumulation_steps
+    if actions.shape[0] != expected_batch_size:
+        raise ValueError(
+            f"DataLoader returned batch size {actions.shape[0]}, expected {expected_batch_size} "
+            f"({microbatch_size} x {accumulation_steps})."
+        )
+    for micro_step in range(accumulation_steps):
+        start = micro_step * microbatch_size
+        stop = start + microbatch_size
+        micro_observation = jax.tree.map(lambda x, start=start, stop=stop: x[start:stop], observation)
+        yield micro_observation, actions[start:stop]
+
+
+def validate_streaming_microbatch(actions: torch.Tensor, microbatch_size: int) -> None:
+    if actions.shape[0] != microbatch_size:
+        raise ValueError(
+            f"Streaming DataLoader returned batch size {actions.shape[0]}, expected physical batch {microbatch_size}."
+        )
+
+
+def iter_microbatches(data_iter, *, streaming: bool, microbatch_size: int, accumulation_steps: int):
+    """Yield one optimizer step's microbatches, whichever way the loader emits them.
+
+    Streaming loaders already emit one physical microbatch per fetch; otherwise
+    a single effective batch arrives and is sliced here. Both shapes look the
+    same to the caller, so the training loop needs no mode branch.
+    """
+    if not streaming:
+        observation, actions = next(data_iter)
+        yield from split_effective_batch(observation, actions, microbatch_size, accumulation_steps)
+        return
+    for _ in range(accumulation_steps):
+        observation, actions = next(data_iter)
+        validate_streaming_microbatch(actions, microbatch_size)
+        yield observation, actions
+
+
+@dataclasses.dataclass(frozen=True)
+class _AsyncIteratorFailure:
+    exception: BaseException
+
+
+_ASYNC_ITERATOR_END = object()
+_ACTIVE_ASYNC_ITERATORS: set["AsyncDataIterator"] = set()
+
+
+class AsyncDataIterator:
+    """Continuously drain a DataLoader into a bounded host-side ready queue."""
+
+    def __init__(self, iterable, *, max_prefetch: int):
+        if max_prefetch <= 0:
+            raise ValueError(f"max_prefetch must be positive, got {max_prefetch}")
+        self._source = iter(iterable)
+        self._queue: queue.Queue[object] = queue.Queue(maxsize=max_prefetch)
+        self._stop = threading.Event()
+        self._closed = False
+        self._thread = threading.Thread(target=self._run, name="openpi-data-producer", daemon=True)
+        _ACTIVE_ASYNC_ITERATORS.add(self)
+        self._thread.start()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        started = time.perf_counter()
+        item = self._queue.get()
+        _profiling.record("dataloader.async_queue_wait", time.perf_counter() - started)
+        if item is _ASYNC_ITERATOR_END:
+            self.close()
+            raise StopIteration
+        if isinstance(item, _AsyncIteratorFailure):
+            self.close()
+            raise item.exception
+        return item
+
+    @property
+    def ready_batches(self) -> int:
+        return self._queue.qsize()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def _enqueue(self, item: object) -> bool:
+        while not self._stop.is_set():
+            try:
+                self._queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _run(self) -> None:
+        try:
+            while not self._stop.is_set():
+                try:
+                    item = next(self._source)
+                except StopIteration:
+                    self._enqueue(_ASYNC_ITERATOR_END)
+                    return
+                if not self._enqueue(item):
+                    return
+        except BaseException as exc:
+            self._enqueue(_AsyncIteratorFailure(exc))
+        finally:
+            close = getattr(self._source, "close", None)
+            if callable(close):
+                close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop.set()
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        # A producer may already be inside one worker-batch fetch when stop is
+        # requested. Give that bounded unit of work time to finish so closing
+        # the source generator also shuts down persistent DataLoader workers.
+        self._thread.join(timeout=30.0)
+        if self._thread.is_alive():
+            logging.warning("Async DataLoader producer did not stop within 30 seconds")
+        _ACTIVE_ASYNC_ITERATORS.discard(self)
+
+
+def close_active_async_iterators() -> None:
+    for iterator in tuple(_ACTIVE_ASYNC_ITERATORS):
+        iterator.close()
+
+
 def _train_loop(config: _config.TrainConfig):
+    use_zero1 = zero_optimizer_enabled()
     use_ddp, local_rank, device = setup_ddp()
     rank = distributed_rank()
     world_size = distributed_world_size()
+    validate_zero_optimizer_configuration(enabled=use_zero1, world_size=world_size)
     is_main = rank == 0
     set_seed(config.seed, local_rank)
     _profiling.set_enabled(enabled=config.profiling_enabled)
-    log_rank_phase(f"train loop initialized global_rank={rank} world_size={world_size}")
+    log_rank_phase(f"train loop initialized global_rank={rank} world_size={world_size} strategy=ddp")
 
     if config.batch_size < world_size or config.batch_size % world_size != 0:
         raise ValueError(
@@ -646,47 +1033,40 @@ def _train_loop(config: _config.TrainConfig):
     # Build data loader using the unified data loader
     # Calculate effective batch size per GPU for DDP
     # For N GPUs, each GPU should get batch_size/N samples, so total across all GPUs is batch_size
-    effective_batch_size = config.batch_size // world_size
+    physical_batch_size = config.batch_size // world_size
+    effective_batch_size = physical_batch_size * config.gradient_accumulation_steps
     logging.info(
-        f"Using batch size per GPU: {effective_batch_size} (total batch size across {world_size} GPUs: {config.batch_size})"
+        "Using physical batch size per GPU: %d; gradient accumulation: %d; "
+        "effective batch size per GPU: %d; effective global batch size: %d",
+        physical_batch_size,
+        config.gradient_accumulation_steps,
+        effective_batch_size,
+        config.batch_size * config.gradient_accumulation_steps,
     )
 
-    # Pass the original batch size to data loader - it will handle DDP splitting internally
+    # The legacy path fetches one complete effective batch per optimizer step.
+    # Streaming accumulation fetches physical micro-batches so preparation of
+    # later data can overlap with GPU work on the current micro-batch.
     log_rank_phase("building distributed dataset and DataLoader")
-    loader, data_config = build_datasets(config)
+
+    streaming_accumulation = config.dataloader_streaming_accumulation
+    loader_global_batch_size = data_loader_global_batch_size(
+        config.batch_size,
+        config.gradient_accumulation_steps,
+        streaming_accumulation=streaming_accumulation,
+    )
+    loader_config = dataclasses.replace(config, batch_size=loader_global_batch_size)
+    loader, data_config = build_datasets(loader_config)
+    logging.info(
+        "DataLoader fetch batch: global=%d local=%d; training microbatch per GPU=%d x %d; streaming=%s",
+        loader_global_batch_size,
+        loader_global_batch_size // world_size,
+        physical_batch_size,
+        config.gradient_accumulation_steps,
+        streaming_accumulation,
+    )
     validate_distributed_frame_filter_identity(loader, use_ddp=use_ddp)
     log_rank_phase("distributed dataset and DataLoader ready")
-
-    # Log sample images to wandb on first batch
-    if is_main and config.wandb_enabled and not resuming:
-        # Create a separate data loader for sample batch to avoid consuming the main loader
-        sample_data_loader = _data.create_data_loader(config, framework="pytorch", shuffle=False)
-        sample_batch = next(iter(sample_data_loader))
-        # Convert observation and actions to torch tensors
-        observation, actions = sample_batch
-        sample_batch = observation.to_dict()
-        sample_batch["actions"] = actions
-
-        # Create sample images for wandb
-        images_to_log = []
-        # Get batch size from the first image tensor
-        batch_size = next(iter(sample_batch["image"].values())).shape[0]
-        for i in range(min(5, batch_size)):
-            # Concatenate all camera views horizontally for this batch item
-            # Convert from NCHW to NHWC format for wandb
-            img_concatenated = torch.cat([img[i].permute(1, 2, 0) for img in sample_batch["image"].values()], axis=1)
-            img_concatenated = img_concatenated.cpu().numpy()
-            images_to_log.append(wandb.Image(img_concatenated))
-
-        wandb.log({"camera_views": images_to_log}, step=0)
-
-        # Clear sample batch from memory aggressively
-        del sample_batch, observation, actions, images_to_log, img_concatenated
-        del sample_data_loader  # Also delete the sample data loader
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        logging.info("Cleared sample batch and data loader from memory")
 
     # Build model
     if not isinstance(config.model, openpi.models.pi0_config.Pi0Config):
@@ -709,13 +1089,10 @@ def _train_loop(config: _config.TrainConfig):
     model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(model_cfg).to(device)
     log_rank_phase("model construction complete")
 
-    if hasattr(model, "gradient_checkpointing_enable"):
-        enable_gradient_checkpointing = True
-        model.gradient_checkpointing_enable()
-        logging.info("Enabled gradient checkpointing for memory optimization")
-    else:
-        enable_gradient_checkpointing = False
-        logging.info("Gradient checkpointing is not supported for this model")
+    optimization_config = training_optimization_config()
+    model.configure_training_compile(enabled=bool(optimization_config["compile_transformer_layers"]))
+    model.set_gradient_checkpointing(enabled=bool(optimization_config["gradient_checkpointing"]))
+    logging.info("Training optimization config: %s", optimization_config)
 
     # Log initial memory usage after model creation
     if is_main and torch.cuda.is_available():
@@ -731,7 +1108,7 @@ def _train_loop(config: _config.TrainConfig):
         logging.info("Enabled memory optimizations for 8+ GPU training")
 
     # Load weights from weight_loader if specified (for fine-tuning)
-    # In DDP, rank 0 loads once before wrapping and DDP broadcasts its parameters.
+    # Rank 0 loads once before DDP synchronizes parameters.
     weight_load_error: Exception | None = None
     log_rank_phase("base weight loading/synchronization begin")
     if config.pytorch_weight_path is not None and (not use_ddp or is_main):
@@ -751,7 +1128,6 @@ def _train_loop(config: _config.TrainConfig):
             device_ids=[device.index] if device.type == "cuda" else None,
             find_unused_parameters=True,
             gradient_as_bucket_view=True,
-            static_graph=world_size >= 8,
         )
         log_rank_phase("DistributedDataParallel wrapping complete")
 
@@ -761,15 +1137,14 @@ def _train_loop(config: _config.TrainConfig):
     decay_steps = config.lr_schedule.decay_steps
     end_lr = config.lr_schedule.decay_lr
 
-    # Create optimizer with config parameters
-    optim = torch.optim.AdamW(
+    # Create optimizer with config parameters. ZeRO-1 preserves DDP training
+    # semantics while keeping only this rank's AdamW state shard.
+    optim = create_optimizer(
         model.parameters(),
-        lr=peak_lr,
-        betas=(config.optimizer.b1, config.optimizer.b2),
-        eps=config.optimizer.eps,
-        weight_decay=config.optimizer.weight_decay,
+        config=config,
+        world_size=world_size,
     )
-    log_rank_phase("optimizer construction complete")
+    log_rank_phase(f"optimizer construction complete type={type(optim).__name__}")
 
     # Load checkpoint if resuming
     global_step = 0
@@ -799,9 +1174,13 @@ def _train_loop(config: _config.TrainConfig):
             f"Running on: {platform.node()} | world_size={torch.distributed.get_world_size() if use_ddp else 1}"
         )
         logging.info(
-            f"Training config: batch_size={config.batch_size}, effective_batch_size={effective_batch_size}, num_train_steps={config.num_train_steps}"
+            f"Training config: physical_global_batch_size={config.batch_size}, "
+            f"physical_local_batch_size={physical_batch_size}, "
+            f"gradient_accumulation_steps={config.gradient_accumulation_steps}, "
+            f"effective_local_batch_size={effective_batch_size}, "
+            f"effective_global_batch_size={config.batch_size * config.gradient_accumulation_steps}, "
+            f"num_train_steps={config.num_train_steps}, distributed_strategy=ddp"
         )
-        logging.info(f"Memory optimizations: gradient_checkpointing={enable_gradient_checkpointing}")
         logging.info(
             f"LR schedule: warmup={warmup_steps}, peak_lr={peak_lr:.2e}, decay_steps={decay_steps}, end_lr={end_lr:.2e}"
         )
@@ -840,62 +1219,118 @@ def _train_loop(config: _config.TrainConfig):
         else None
     )
 
-    data_iter = iter(loader)
+    base_data_iter = iter(loader)
+    async_data_iter = None
+    if config.dataloader_async_queue_size > 0:
+        async_data_iter = AsyncDataIterator(
+            base_data_iter,
+            max_prefetch=config.dataloader_async_queue_size,
+        )
+        data_iter = iter(async_data_iter)
+        logging.info(
+            "Async DataLoader producer enabled queue_size=%d streaming=%s",
+            config.dataloader_async_queue_size,
+            streaming_accumulation,
+        )
+    else:
+        data_iter = base_data_iter
     if config.dataloader_prewarm:
         prewarm_started = time.perf_counter()
         prewarm_batch = next(data_iter)
         prewarm_elapsed = time.perf_counter() - prewarm_started
-        logging.info("DataLoader pre-warm produced one local batch in %.3fs on rank=%d", prewarm_elapsed, rank)
-        if use_ddp:
+        logging.info(
+            "DataLoader pre-warm produced one local %s batch in %.3fs on rank=%d ready_queue=%d",
+            "physical" if streaming_accumulation else "effective",
+            prewarm_elapsed,
+            rank,
+            async_data_iter.ready_batches if async_data_iter is not None else 0,
+        )
+        # The final accumulated backward already synchronizes DDP ranks. Avoid
+        # making the slowest rank block every other rank before any GPU work.
+        if use_ddp and not streaming_accumulation:
             dist.barrier()
         data_iter = itertools.chain((prewarm_batch,), data_iter)
         log_rank_phase(f"DataLoader pre-warm complete elapsed={prewarm_elapsed:.3f}s")
     log_rank_phase(f"training iteration ready initial_global_step={global_step}")
     logging_interval = config.profiling_log_interval if config.profiling_enabled else config.log_interval
+    camera_preview_pending = is_main and config.wandb_enabled and not resuming
     while global_step < config.num_train_steps:
         step_started = time.perf_counter()
-        data_started = time.perf_counter()
-        observation, actions = next(data_iter)
-        data_wait_ms = (time.perf_counter() - data_started) * 1000.0
-
-        cuda_events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]] = {}
-
-        # The unified data loader returns (observation, actions) tuple.
-        phase_started = start_cuda_phase("h2d", cuda_events, profiling_enabled=config.profiling_enabled, device=device)
-        observation = jax.tree.map(lambda x: x.to(device, non_blocking=True), observation)
-        actions = actions.to(device=device, dtype=torch.float32, non_blocking=True)
-        phase_cpu_ms = {"h2d": end_cuda_phase("h2d", phase_started, cuda_events)}
+        data_wait_ms = 0.0
+        cuda_events: dict[str, list[tuple[torch.cuda.Event, torch.cuda.Event]]] = {}
+        phase_cpu_ms = {"h2d": 0.0, "forward": 0.0, "backward": 0.0}
+        step_loss_sum: torch.Tensor | None = None
 
         for pg in optim.param_groups:
             pg["lr"] = lr_schedule(global_step)
+        optim.zero_grad(set_to_none=True)
 
-        phase_started = start_cuda_phase(
-            "forward", cuda_events, profiling_enabled=config.profiling_enabled, device=device
+        microbatches = iter_microbatches(
+            data_iter,
+            streaming=streaming_accumulation,
+            microbatch_size=physical_batch_size,
+            accumulation_steps=config.gradient_accumulation_steps,
         )
-        losses = model(observation, actions)
-        if isinstance(losses, list | tuple):
-            losses = torch.stack(losses)
-        elif not isinstance(losses, torch.Tensor):
-            losses = torch.tensor(losses, device=device, dtype=torch.float32)
-        loss = losses.mean()
-        step_metric_names, step_action_loss_stats = _action_loss_metrics.action_loss_sums_and_counts(
-            losses,
-            observation.actions_dim_is_pad,
-        )
-        if action_loss_metric_names is None:
-            action_loss_metric_names = step_metric_names
-            action_loss_accumulator = torch.zeros_like(step_action_loss_stats)
-        elif action_loss_metric_names != step_metric_names:
-            raise RuntimeError("Action loss metric layout changed during training.")
-        assert action_loss_accumulator is not None
-        action_loss_accumulator.add_(step_action_loss_stats)
-        phase_cpu_ms["forward"] = end_cuda_phase("forward", phase_started, cuda_events)
 
-        phase_started = start_cuda_phase(
-            "backward", cuda_events, profiling_enabled=config.profiling_enabled, device=device
-        )
-        loss.backward()
-        phase_cpu_ms["backward"] = end_cuda_phase("backward", phase_started, cuda_events)
+        for micro_step in range(config.gradient_accumulation_steps):
+            data_started = time.perf_counter()
+            host_observation, host_actions = next(microbatches)
+            data_wait_ms += (time.perf_counter() - data_started) * 1000.0
+            if camera_preview_pending:
+                log_camera_views(host_observation, step=global_step)
+                camera_preview_pending = False
+            # Transfer only one physical microbatch at a time; the full effective
+            # batch is never moved to the GPU at once.
+            phase_started = start_cuda_phase(
+                "h2d", cuda_events, profiling_enabled=config.profiling_enabled, device=device
+            )
+            observation = jax.tree.map(lambda x: x.to(device, non_blocking=True), host_observation)
+            actions = host_actions.to(device=device, dtype=torch.float32, non_blocking=True)
+            phase_cpu_ms["h2d"] += end_cuda_phase("h2d", phase_started, cuda_events)
+
+            # DDP requires both forward and backward to be inside no_sync().
+            with gradient_accumulation_context(
+                model,
+                micro_step,
+                config.gradient_accumulation_steps,
+            ):
+                phase_started = start_cuda_phase(
+                    "forward", cuda_events, profiling_enabled=config.profiling_enabled, device=device
+                )
+                with torch.autocast(
+                    device_type=device.type,
+                    dtype=torch.bfloat16,
+                    enabled=bool(optimization_config["bf16_autocast"]) and device.type == "cuda",
+                ):
+                    losses = model(observation, actions)
+                if isinstance(losses, list | tuple):
+                    losses = torch.stack(losses)
+                elif not isinstance(losses, torch.Tensor):
+                    losses = torch.tensor(losses, device=device, dtype=torch.float32)
+                loss = losses.mean()
+                # Accumulate on device: a per-microbatch ``.item()`` would stall
+                # every rank between forward and backward, and only rank 0 (or a
+                # profiling run) ever reads the result.
+                detached_loss = loss.detach()
+                step_loss_sum = detached_loss if step_loss_sum is None else step_loss_sum + detached_loss
+                step_metric_names, step_action_loss_stats = _action_loss_metrics.action_loss_sums_and_counts(
+                    losses,
+                    observation.actions_dim_is_pad,
+                )
+                if action_loss_metric_names is None:
+                    action_loss_metric_names = step_metric_names
+                    action_loss_accumulator = torch.zeros_like(step_action_loss_stats)
+                elif action_loss_metric_names != step_metric_names:
+                    raise RuntimeError("Action loss metric layout changed during training.")
+                assert action_loss_accumulator is not None
+                action_loss_accumulator.add_(step_action_loss_stats)
+                phase_cpu_ms["forward"] += end_cuda_phase("forward", phase_started, cuda_events)
+
+                phase_started = start_cuda_phase(
+                    "backward", cuda_events, profiling_enabled=config.profiling_enabled, device=device
+                )
+                (loss / config.gradient_accumulation_steps).backward()
+                phase_cpu_ms["backward"] += end_cuda_phase("backward", phase_started, cuda_events)
 
         if global_step < 5 and is_main and torch.cuda.is_available():
             log_memory_usage(device, global_step, "after_backward")
@@ -905,31 +1340,32 @@ def _train_loop(config: _config.TrainConfig):
         )
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.optimizer.clip_gradient_norm)
         optim.step()
-        optim.zero_grad(set_to_none=True)
         phase_cpu_ms["optimizer"] = end_cuda_phase("optimizer", phase_started, cuda_events)
-
-        for param in model.parameters():
-            if param.grad is not None:
-                param.grad.detach_()
-                param.grad = None
 
         profile_values: dict[str, float] = {}
         if config.profiling_enabled:
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
                 profile_values = {
-                    f"{name}_ms": events[0].elapsed_time(events[1]) for name, events in cuda_events.items()
+                    f"{name}_ms": sum(start.elapsed_time(end) for start, end in events)
+                    for name, events in cuda_events.items()
                 }
             else:
                 profile_values = {f"{name}_ms": value for name, value in phase_cpu_ms.items()}
             profile_values["data_wait_ms"] = data_wait_ms
             profile_values["step_ms"] = (time.perf_counter() - step_started) * 1000.0
+            profile_values["data_queue_depth"] = float(
+                async_data_iter.ready_batches if async_data_iter is not None else 0
+            )
             profile_values["samples_per_second"] = effective_batch_size / max(profile_values["step_ms"] / 1000.0, 1e-9)
 
+        step_loss_value = 0.0
         if is_main or config.profiling_enabled:
+            # The one host sync per step, next to the one clip_grad_norm_ already needs.
+            step_loss_value = float(step_loss_sum) / config.gradient_accumulation_steps
             infos.append(
                 {
-                    "loss": loss.item(),
+                    "loss": step_loss_value,
                     "learning_rate": optim.param_groups[0]["lr"],
                     "grad_norm": float(grad_norm) if isinstance(grad_norm, torch.Tensor) else grad_norm,
                     **profile_values,
@@ -1007,6 +1443,7 @@ def _train_loop(config: _config.TrainConfig):
                     "backward_ms",
                     "optimizer_ms",
                     "step_ms",
+                    "data_queue_depth",
                     "samples_per_second",
                 )
                 local_averages = {
@@ -1053,7 +1490,8 @@ def _train_loop(config: _config.TrainConfig):
                     logging.info(
                         "profile step=%d global_samples/s=%.2f slowest_step=%.1fms "
                         "data_wait(avg/max)=%.1f/%.1fms forward(avg/max)=%.1f/%.1fms "
-                        "backward(avg/max)=%.1f/%.1fms gpu_util(avg/min/max)=%.1f/%.1f/%.1f%%",
+                        "backward(avg/max)=%.1f/%.1fms queue(avg/min/max)=%.1f/%.0f/%.0f "
+                        "gpu_util(avg/min/max)=%.1f/%.1f/%.1f%%",
                         global_step,
                         global_profile_values["samples_per_second_effective"],
                         global_profile_values["step_ms_max"],
@@ -1063,6 +1501,9 @@ def _train_loop(config: _config.TrainConfig):
                         global_profile_values["forward_ms_max"],
                         global_profile_values["backward_ms_avg"],
                         global_profile_values["backward_ms_max"],
+                        global_profile_values["data_queue_depth_avg"],
+                        global_profile_values["data_queue_depth_min"],
+                        global_profile_values["data_queue_depth_max"],
                         global_gpu_values.get("gpu_util_avg", float("nan")),
                         global_gpu_values.get("gpu_util_avg_min", float("nan")),
                         global_gpu_values.get("gpu_util_max", float("nan")),
@@ -1111,10 +1552,13 @@ def _train_loop(config: _config.TrainConfig):
         if pbar is not None:
             pbar.update(1)
             pbar.set_postfix(
-                {"loss": f"{loss.item():.4f}", "lr": f"{optim.param_groups[0]['lr']:.2e}", "step": global_step}
+                {"loss": f"{step_loss_value:.4f}", "lr": f"{optim.param_groups[0]['lr']:.2e}", "step": global_step}
             )
 
-    # Close progress bar
+    # The async wrapper closes its source generator itself; without it the
+    # DataLoader generator is closed directly to stop persistent workers.
+    (async_data_iter or base_data_iter).close()
+
     if pbar is not None:
         pbar.close()
 
@@ -1133,6 +1577,7 @@ def train_loop(config: _config.TrainConfig):
     try:
         _train_loop(config)
     finally:
+        close_active_async_iterators()
         cleanup_ddp()
 
 

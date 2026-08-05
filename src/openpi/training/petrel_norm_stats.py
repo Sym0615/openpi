@@ -30,13 +30,16 @@ class _Accumulator:
         self.count = 0
         self.sum = np.zeros(self.dim, dtype=np.float64)
         self.sumsq = np.zeros(self.dim, dtype=np.float64)
-        self.reservoir = np.empty((max(0, self.reservoir_rows), self.dim), dtype=np.float32)
+        self.reservoir: np.ndarray | None = None
         self.reservoir_count = 0
         self.rows_seen = 0
         self.rng = np.random.default_rng(self.seed)
 
     def update(self, value: torch.Tensor | np.ndarray) -> None:
-        array = np.asarray(value, dtype=np.float32).reshape(-1, self.dim)
+        array = np.asarray(value, dtype=np.float32)
+        if array.ndim < 1 or int(array.shape[-1]) != self.dim:
+            raise ValueError(f"Petrel norm stats expected trailing dimension {self.dim}, got {tuple(array.shape)}.")
+        array = array.reshape(-1, self.dim)
         if not bool(np.isfinite(array).all()):
             raise ValueError("Petrel norm stats encountered non-finite projected values.")
         rows = int(array.shape[0])
@@ -49,10 +52,16 @@ class _Accumulator:
         self._update_reservoir(array)
 
     def _update_reservoir(self, rows: np.ndarray) -> None:
-        capacity = int(self.reservoir.shape[0])
+        capacity = max(0, int(self.reservoir_rows))
         if capacity <= 0:
             self.rows_seen += int(rows.shape[0])
             return
+        if self.reservoir is None:
+            # Allocate on first use. Every worker holds an accumulator for every
+            # stats group, but a group's episode blocks usually land in one or
+            # two shards, so eager allocation would reserve host memory for the
+            # groups a worker never observes.
+            self.reservoir = np.empty((capacity, self.dim), dtype=np.float32)
         for row in rows:
             self.rows_seen += 1
             if self.reservoir_count < capacity:
@@ -67,7 +76,8 @@ class _Accumulator:
         self.count += int(other.count)
         self.sum += other.sum
         self.sumsq += other.sumsq
-        self._update_reservoir(other.reservoir[: other.reservoir_count])
+        if other.reservoir is not None:
+            self._update_reservoir(other.reservoir[: other.reservoir_count])
 
     def finalize(self) -> normalize.NormStats:
         if self.count < 2:
@@ -75,9 +85,9 @@ class _Accumulator:
         mean = self.sum / float(self.count)
         variance = self.sumsq / float(self.count) - np.square(mean)
         std = np.sqrt(np.maximum(variance, 0.0))
-        sample = self.reservoir[: self.reservoir_count].astype(np.float64, copy=False)
-        if sample.shape[0] < 2:
+        if self.reservoir is None or self.reservoir_count < 2:
             raise ValueError("Petrel norm reservoir contains fewer than two rows.")
+        sample = self.reservoir[: self.reservoir_count].astype(np.float64, copy=False)
         q01, q99 = np.quantile(sample, [0.01, 0.99], axis=0)
         return normalize.NormStats(mean=mean, std=std, q01=q01, q99=q99)
 
@@ -97,8 +107,10 @@ class _HorizonAccumulator:
         self.sumsq = np.zeros((self.horizon, self.dim), dtype=np.float64)
         # Keep reservoir_rows as a total vector budget so per-step statistics do
         # not multiply memory consumption by the action horizon.
-        capacity = max(2, int(self.reservoir_rows) // self.horizon) if self.reservoir_rows > 0 else 0
-        self.reservoir = np.empty((capacity, self.horizon, self.dim), dtype=np.float32)
+        self.reservoir_capacity = (
+            max(2, int(self.reservoir_rows) // self.horizon) if self.reservoir_rows > 0 else 0
+        )
+        self.reservoir: np.ndarray | None = None
         self.reservoir_count = 0
         self.rows_seen = 0
         self.rng = np.random.default_rng(self.seed)
@@ -122,10 +134,12 @@ class _HorizonAccumulator:
         self._update_reservoir(array)
 
     def _update_reservoir(self, rows: np.ndarray) -> None:
-        capacity = int(self.reservoir.shape[0])
+        capacity = int(self.reservoir_capacity)
         if capacity <= 0:
             self.rows_seen += int(rows.shape[0])
             return
+        if self.reservoir is None:
+            self.reservoir = np.empty((capacity, self.horizon, self.dim), dtype=np.float32)
         for row in rows:
             self.rows_seen += 1
             if self.reservoir_count < capacity:
@@ -145,7 +159,8 @@ class _HorizonAccumulator:
         self.count += int(other.count)
         self.sum += other.sum
         self.sumsq += other.sumsq
-        self._update_reservoir(other.reservoir[: other.reservoir_count])
+        if other.reservoir is not None:
+            self._update_reservoir(other.reservoir[: other.reservoir_count])
 
     def finalize(self) -> normalize.NormStats:
         if self.count < 2:
@@ -153,9 +168,9 @@ class _HorizonAccumulator:
         mean = self.sum / float(self.count)
         variance = self.sumsq / float(self.count) - np.square(mean)
         std = np.sqrt(np.maximum(variance, 0.0))
-        sample = self.reservoir[: self.reservoir_count].astype(np.float64, copy=False)
-        if sample.shape[0] < 2:
+        if self.reservoir is None or self.reservoir_count < 2:
             raise ValueError("Petrel action norm reservoir contains fewer than two windows.")
+        sample = self.reservoir[: self.reservoir_count].astype(np.float64, copy=False)
         q01, q99 = np.quantile(sample, [0.01, 0.99], axis=0)
         return normalize.NormStats(mean=mean, std=std, q01=q01, q99=q99)
 
@@ -172,6 +187,19 @@ class _WorkerStats:
     groups: dict[str, _GroupStats] = dataclasses.field(default_factory=dict)
     windows: int = 0
     skipped_windows: int = 0
+
+
+def reservoir_rows_per_group(reservoir_rows: int, group_count: int) -> int:
+    """Quantile samples every accumulator keeps for one stats group.
+
+    The same capacity is used on every worker and on the merged accumulator. It
+    is deliberately not divided by the worker count: stats groups are
+    per-task/per-dataset, so a group's episode blocks usually land in one or two
+    shards, and dividing would leave exactly those groups with a fraction of the
+    requested samples. Reservoirs are allocated lazily, so a worker only pays for
+    the groups it actually observes.
+    """
+    return max(1024, math.ceil(int(reservoir_rows) / max(1, int(group_count))))
 
 
 def _group_seed(seed: int, stats_group: str, offset: int) -> int:
@@ -195,22 +223,19 @@ def _new_group_stats(
 
 def _spec_stats_groups(spec: Any) -> tuple[str, ...]:
     return tuple(
-        dict.fromkeys(
-            [str(spec.stats_group or spec.name), *(str(group) for group in spec.stats_group_fallbacks)]
-        )
+        dict.fromkeys([str(spec.stats_group or spec.name), *(str(group) for group in spec.stats_group_fallbacks)])
     )
 
 
 def _make_dataset(spec: Any, raw_config: dict[str, Any], action_horizon: int) -> Any:
-    storage = raw_config["storage"]
     sampling = raw_config["sampling"]
     return reader.PetrelLeRobotDataset(
         spec,
         num_frames=int(sampling["num_frames"]),
         action_size=int(action_horizon),
         global_sample_stride=int(sampling["global_sample_stride"]),
-        parquet_cache_size=int(storage.get("parquet_cache_size", 8)),
         use_path_index_cache=True,
+        **reader.parquet_storage_options(raw_config),
     )
 
 
@@ -236,9 +261,7 @@ def _select_episode_blocks(
 
     # Guarantee that bounded smoke/stat runs cover every normalization group.
     # A unit can cover both its task/profile group and one or more fallbacks.
-    uncovered_groups = {
-        str(group) for unit in units for group in unit.get("stats_groups", ())
-    }
+    uncovered_groups = {str(group) for unit in units for group in unit.get("stats_groups", ())}
     for raw_block_index in order:
         if not uncovered_groups:
             break
@@ -490,7 +513,7 @@ def compute_fast_petrel_norm_stats(
     worker_count = min(max(1, int(num_workers)), len(units))
     shards = _split_plan(units, worker_count)
     expected_groups = sorted({group for spec in specs for group in _spec_stats_groups(spec)})
-    per_group_reservoir = max(1024, math.ceil(int(reservoir_rows) / len(expected_groups)))
+    per_group_reservoir = reservoir_rows_per_group(reservoir_rows, len(expected_groups))
     payloads = [
         {
             "worker_id": worker_id,

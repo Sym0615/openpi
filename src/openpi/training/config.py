@@ -558,6 +558,8 @@ class TrainConfig:
     seed: int = 42
     # Global batch size.
     batch_size: int = 32
+    # Number of physical batches whose gradients are accumulated before one optimizer step.
+    gradient_accumulation_steps: int = 1
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2
@@ -568,7 +570,14 @@ class TrainConfig:
     dataloader_in_order: bool = True
     dataloader_pin_memory: bool = False
     dataloader_prewarm: bool = False
-    # Number of train steps (batches) to run.
+    # Stream physical micro-batches to the training loop instead of assembling one
+    # effective batch for the whole gradient-accumulation step. This lets GPU work
+    # overlap with preparation of later micro-batches.
+    dataloader_streaming_accumulation: bool = False
+    # Number of physical micro-batches prepared by a host producer thread. Zero
+    # keeps synchronous iteration.
+    dataloader_async_queue_size: int = 0
+    # Number of train steps (optimizer updates) to run.
     num_train_steps: int = 30_000
 
     # Optional per-rank performance and GPU profiling. Disabled for normal training.
@@ -623,6 +632,10 @@ class TrainConfig:
     def __post_init__(self) -> None:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
+        if self.gradient_accumulation_steps <= 0:
+            raise ValueError("gradient_accumulation_steps must be positive")
+        if self.dataloader_async_queue_size < 0:
+            raise ValueError("dataloader_async_queue_size must be non-negative")
         if self.profiling_enabled:
             if self.profiling_warmup_steps < 0:
                 raise ValueError("profiling_warmup_steps must be non-negative")
@@ -1000,6 +1013,7 @@ _CONFIGS = [
         # ABC-130K-v3 local RGB datasets. Three-camera schemas map directly to
         # Pi0 slots; four-camera schemas select top-left and both wrist views.
         name="pi05_abc130k",
+        project_name="openpi-abc130k",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=30),
         data=PetrelDataConfig(
             repo_id="abc130k",
@@ -1007,6 +1021,25 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/datahub/public/model/pi05_base_pytorch_bf16",
+        pytorch_training_precision="bfloat16",
+        num_workers=16,
+    ),
+    TrainConfig(
+        # Local debug variant for machines where datahub is mounted under
+        # /oss/datahub instead of /datahub. Everything else is shared with
+        # pi05_abc130k, so only the mount point is overridden here.
+        name="pi05_abc130k_debug",
+        project_name="openpi-abc130k",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=30),
+        data=PetrelDataConfig(
+            repo_id="abc130k",
+            dataset=PetrelDatasetConfig(
+                dataset_config="configs/petrel/pi05_abc130k.yaml",
+                local_root="/oss/datahub/public/real/ABC-130K-v3/train",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/oss/datahub/public/model/pi05_base_pytorch_bf16",
         pytorch_training_precision="bfloat16",
         num_workers=16,
     ),

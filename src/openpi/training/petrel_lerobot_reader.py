@@ -27,6 +27,7 @@ from collections import OrderedDict
 import copy
 import hashlib
 import json
+import logging
 import math
 import os
 import tempfile
@@ -37,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import torch
@@ -122,8 +124,11 @@ def _profile_print() -> None:
 class LocalFileClient:
     """Read dataset objects from one isolated local filesystem root."""
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, parquet_cache_dir: str | Path | None = None):
         self.root = Path(root).expanduser().resolve()
+        self.parquet_cache_dir = (
+            Path(parquet_cache_dir).expanduser().resolve() if parquet_cache_dir not in (None, "") else None
+        )
 
     def resolve_path(self, path: str) -> Path:
         """Resolve a dataset path without allowing it to escape the configured root."""
@@ -149,6 +154,128 @@ class LocalFileClient:
             path=resolved.name,
         )
         return data
+
+    def resolve_parquet_path(self, path: str) -> Path:
+        """Prefer a fully staged node-local parquet file when available."""
+        source_path = self.resolve_path(path)
+        if self.parquet_cache_dir is None or source_path.suffix.lower() != ".parquet":
+            return source_path
+        cached_path = local_parquet_cache_path(self.parquet_cache_dir, source_path)
+        try:
+            # scripts/stage_petrel_parquets.py stages a byte-identical copy, so a
+            # size match is the same freshness test the stager applies. Accepting
+            # any non-empty file would keep serving a superseded copy after the
+            # source parquet is regenerated without re-running the stager.
+            if cached_path.is_file() and cached_path.stat().st_size == source_path.stat().st_size:
+                _profile_record("parquet.node_cache_hit", 0.0, path=source_path.name)
+                return cached_path
+        except OSError:
+            pass
+        _profile_record("parquet.node_cache_miss", 0.0, path=source_path.name)
+        return source_path
+
+
+def local_parquet_cache_path(cache_dir: str | Path, source_path: str | Path) -> Path:
+    """Map an absolute source path to a collision-resistant flat cache path.
+
+    The digest must be computed from a fully canonicalized path: the reader
+    resolves symlinks via ``LocalFileClient.resolve_path`` before it gets here,
+    and datahub is commonly mounted under more than one alias, so any other
+    normalization would make the staging tool and the reader disagree.
+    """
+    source = str(Path(source_path).expanduser().resolve())
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    return Path(cache_dir).expanduser() / f"{digest}.parquet"
+
+
+def parquet_storage_options(raw_config: dict[str, Any]) -> dict[str, Any]:
+    """Derive the parquet-read kwargs every ``PetrelLeRobotDataset`` needs.
+
+    Training, norm-stat computation and the reader CLI must agree on these or
+    they silently read through different paths -- one from the staged node-local
+    cache, another from the shared mount.
+    """
+    storage = raw_config.get("storage") if isinstance(raw_config.get("storage"), dict) else {}
+    return {
+        "parquet_cache_size": int(storage.get("parquet_cache_size", 8)),
+        "direct_parquet_row_group_read": bool(storage.get("direct_parquet_row_group_read", False)),
+        "local_parquet_cache_dir": os.environ.get("OPENPI_PARQUET_CACHE_DIR") or storage.get("local_parquet_cache_dir"),
+    }
+
+
+def _parquet_row_groups_for_episode(
+    parquet_file: Any,
+    *,
+    source_episode_index: int,
+    index_bounds: tuple[int, int] | None,
+) -> list[int]:
+    """Return row groups that overlap one episode using parquet footer statistics.
+
+    ABC-130K v3 stores multiple episodes in each parquet file, normally one
+    episode per row group. Reading the entire file for every sampled frame is
+    therefore substantially more expensive than selecting the row group from
+    the footer. Fall back to index bounds for producers that omit useful
+    episode_index statistics.
+    """
+
+    metadata = parquet_file.metadata
+
+    def column_index(name: str) -> int | None:
+        # ColumnChunkMetaData is addressed by parquet *leaf* ordinal, which
+        # diverges from the top-level Arrow field ordinal as soon as any column
+        # expands to more than one leaf (lists, structs).
+        parquet_schema = metadata.schema
+        for leaf_index in range(len(parquet_schema)):
+            if parquet_schema.column(leaf_index).path == name:
+                return leaf_index
+        return None
+
+    def statistic_range(row_group_index: int, column: int | None) -> tuple[int, int] | None:
+        if column is None:
+            return None
+        statistics = metadata.row_group(row_group_index).column(column).statistics
+        if statistics is None or not statistics.has_min_max:
+            return None
+        try:
+            return int(statistics.min), int(statistics.max)
+        except (TypeError, ValueError):
+            return None
+
+    def select_row_groups(column: int | None, overlaps) -> list[int] | None:
+        """Return the overlapping row groups, or None when no statistics exist.
+
+        Row groups without usable statistics are kept unconditionally: writers
+        drop statistics per chunk, and ``_filter_episode_table`` discards the
+        extra rows anyway, whereas skipping such a group would silently return
+        a truncated episode.
+        """
+        selected: list[int] = []
+        statistics_available = False
+        for row_group_index in range(metadata.num_row_groups):
+            value_range = statistic_range(row_group_index, column)
+            if value_range is None:
+                selected.append(row_group_index)
+                continue
+            statistics_available = True
+            if overlaps(*value_range):
+                selected.append(row_group_index)
+        return selected if statistics_available else None
+
+    episode_groups = select_row_groups(
+        column_index("episode_index"),
+        lambda minimum, maximum: minimum <= int(source_episode_index) <= maximum,
+    )
+    if episode_groups is not None:
+        return episode_groups
+
+    if index_bounds is None:
+        return []
+    start, end = (int(index_bounds[0]), int(index_bounds[1]))
+    index_groups = select_row_groups(
+        column_index("index"),
+        lambda minimum, maximum: maximum >= start and minimum < end,
+    )
+    return index_groups if index_groups is not None else []
 
 
 def petrel_join(base_url: str, *parts: str) -> str:
@@ -301,9 +428,7 @@ def _safe_name(text: str) -> str:
 
 def _safe_rel_path(text: str) -> str:
     parts = [
-        _safe_name(part)
-        for part in str(text).strip("/").split("/")
-        if part.strip("/") and part not in {".", ".."}
+        _safe_name(part) for part in str(text).strip("/").split("/") if part.strip("/") and part not in {".", ".."}
     ]
     return "/".join(part for part in parts if part)
 
@@ -380,6 +505,23 @@ def _table_to_tensors(table: Any) -> dict[str, torch.Tensor | list[Any]]:
     out: dict[str, torch.Tensor | list[Any]] = {}
     for name in table.column_names:
         column = table[name]
+        arr: np.ndarray[Any, Any] | None = None
+        if column.null_count == 0 and pa.types.is_fixed_size_list(column.type):
+            combined = column.combine_chunks()
+            values = combined.values.to_numpy(zero_copy_only=False)
+            arr = np.asarray(values).reshape(len(combined), int(column.type.list_size))
+        elif column.null_count == 0 and (
+            pa.types.is_boolean(column.type) or pa.types.is_floating(column.type) or pa.types.is_integer(column.type)
+        ):
+            arr = np.asarray(column.to_numpy(zero_copy_only=False))
+        if arr is not None:
+            if arr.dtype.kind == "f":
+                arr = arr.astype(np.float32, copy=False)
+            if not arr.flags.writeable:
+                arr = arr.copy()
+            out[name] = torch.from_numpy(arr)
+            continue
+
         values = column.to_pylist()
         if not values:
             out[name] = torch.empty(0)
@@ -494,6 +636,26 @@ def _normalize_quat(q: torch.Tensor) -> torch.Tensor:
     return q / q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
 
 
+def _quat_wxyz_to_matrix(q: torch.Tensor) -> torch.Tensor:
+    q = _normalize_quat(q.to(torch.float32))
+    w, x, y, z = q.unbind(dim=-1)
+    two = 2.0
+    return torch.stack(
+        [
+            1.0 - two * (y * y + z * z),
+            two * (x * y - z * w),
+            two * (x * z + y * w),
+            two * (x * y + z * w),
+            1.0 - two * (x * x + z * z),
+            two * (y * z - x * w),
+            two * (x * z - y * w),
+            two * (y * z + x * w),
+            1.0 - two * (x * x + y * y),
+        ],
+        dim=-1,
+    ).reshape(*q.shape[:-1], 3, 3)
+
+
 def _quat_to_rotvec_wxyz(q: torch.Tensor) -> torch.Tensor:
     q = _normalize_quat(q.to(torch.float32))
     sign = torch.where(q[..., :1] < 0, -1.0, 1.0)
@@ -504,10 +666,6 @@ def _quat_to_rotvec_wxyz(q: torch.Tensor) -> torch.Tensor:
     angle = 2.0 * torch.atan2(sin_half, w)
     scale = torch.where(sin_half > 1e-8, angle / sin_half, 2.0 * torch.ones_like(sin_half))
     return xyz * scale
-
-
-def _quat_to_rotvec_xyzw(q: torch.Tensor) -> torch.Tensor:
-    return _quat_to_rotvec_wxyz(torch.cat([q[..., 3:4], q[..., :3]], dim=-1))
 
 
 def _quat_conj_wxyz(q: torch.Tensor) -> torch.Tensor:
@@ -545,25 +703,36 @@ def _rpy_to_rotvec(rpy: torch.Tensor) -> torch.Tensor:
     return _quat_to_rotvec_wxyz(torch.cat([qw, qx, qy, qz], dim=-1))
 
 
-def _pose_to_xyz_rotvec(value: torch.Tensor, pose_input: str) -> torch.Tensor:  # return xyz_rotvec
+def _pose_to_xyz_matrix(value: torch.Tensor, pose_input: str) -> tuple[torch.Tensor, torch.Tensor]:
     value = _as_feature_matrix(value, "pose").to(torch.float32)
     if pose_input == "xyz_rotvec":
         if value.shape[-1] != 6:
             raise ValueError(f"xyz_rotvec pose expects 6 dims, got {value.shape[-1]}")
-        return value
+        return value[..., :3], _rotvec_to_matrix(value[..., 3:6])
     if pose_input == "xyz_quat_wxyz":
         if value.shape[-1] != 7:
             raise ValueError(f"xyz_quat_wxyz pose expects 7 dims, got {value.shape[-1]}")
-        return torch.cat([value[..., :3], _quat_to_rotvec_wxyz(value[..., 3:7])], dim=-1)
+        return value[..., :3], _quat_wxyz_to_matrix(value[..., 3:7])
     if pose_input == "xyz_quat_xyzw":
         if value.shape[-1] != 7:
             raise ValueError(f"xyz_quat_xyzw pose expects 7 dims, got {value.shape[-1]}")
-        return torch.cat([value[..., :3], _quat_to_rotvec_xyzw(value[..., 3:7])], dim=-1)
+        quat = torch.cat([value[..., 6:7], value[..., 3:6]], dim=-1)
+        return value[..., :3], _quat_wxyz_to_matrix(quat)
     if pose_input in {"xyz_rpy", "delta_xyz_rpy"}:
         if value.shape[-1] != 6:
             raise ValueError(f"{pose_input} pose expects 6 dims, got {value.shape[-1]}")
-        return torch.cat([value[..., :3], _rpy_to_rotvec(value[..., 3:6])], dim=-1)
+        return value[..., :3], _rotvec_to_matrix(_rpy_to_rotvec(value[..., 3:6]))
     raise ValueError(f"Unsupported canonical_adapter pose_input={pose_input!r}")
+
+
+def _split_rotation_to_matrix(rotation: torch.Tensor, pose_input: str) -> torch.Tensor:
+    rotation = _as_feature_matrix(rotation, "rotation").to(torch.float32)
+    if rotation.shape[-1] == 4:
+        quat = torch.cat([rotation[..., 3:4], rotation[..., :3]], dim=-1) if "xyzw" in pose_input else rotation
+        return _quat_wxyz_to_matrix(quat)
+    if rotation.shape[-1] == 3:
+        return _rotvec_to_matrix(_rpy_to_rotvec(rotation))
+    raise ValueError(f"Canonical ee rotation expects 3 or 4 dims, got {rotation.shape[-1]}")
 
 
 def _pose_output_format(kind: str, adapter: dict[str, Any], component: dict[str, Any]) -> str:
@@ -576,19 +745,18 @@ def _pose_output_format(kind: str, adapter: dict[str, Any], component: dict[str,
     )
 
 
-def _rotvec_to_rot6d(rotvec: torch.Tensor) -> torch.Tensor:
-    rotation = _rotvec_to_matrix(rotvec)
+def _matrix_to_rot6d(rotation: torch.Tensor) -> torch.Tensor:
     return rotation[..., :, :2].transpose(-1, -2).reshape(*rotation.shape[:-2], 6)
 
 
-def _format_xyz_rotvec_pose(pose: torch.Tensor, pose_output: str) -> torch.Tensor:
+def _format_xyz_matrix_pose(xyz: torch.Tensor, rotation: torch.Tensor, pose_output: str) -> torch.Tensor:
     pose_output = str(pose_output)
     if pose_output in {"xyz_rotvec", "delta_xyz_rotvec"}:
-        return pose
+        return torch.cat([xyz, _matrix_to_rotvec(rotation)], dim=-1)
     if pose_output == "xyz_rot6d":
-        return torch.cat([pose[..., :3], _rotvec_to_rot6d(pose[..., 3:6])], dim=-1)
+        return torch.cat([xyz, _matrix_to_rot6d(rotation)], dim=-1)
     if pose_output in {"xyz_rpy", "delta_xyz_rpy"}:
-        return torch.cat([pose[..., :3], _rotvec_to_rpy(pose[..., 3:6])], dim=-1)
+        return torch.cat([xyz, _rotvec_to_rpy(_matrix_to_rotvec(rotation))], dim=-1)
     raise ValueError(f"Unsupported canonical_adapter pose_output={pose_output!r}")
 
 
@@ -649,16 +817,74 @@ def _rotvec_to_matrix(rotvec: torch.Tensor) -> torch.Tensor:
 
 def _matrix_to_rotvec(rotation: torch.Tensor) -> torch.Tensor:
     r = rotation.to(torch.float32)
-    trace = r[..., 0, 0] + r[..., 1, 1] + r[..., 2, 2]
-    cos_theta = ((trace - 1.0) * 0.5).clamp(-1.0, 1.0)
-    theta = torch.acos(cos_theta)
-    vee = torch.stack(
-        [r[..., 2, 1] - r[..., 1, 2], r[..., 0, 2] - r[..., 2, 0], r[..., 1, 0] - r[..., 0, 1]],
+    if r.shape[-2:] != (3, 3):
+        raise ValueError(f"rotation matrix must end in [3,3], got {tuple(r.shape)}")
+    flat = r.reshape(-1, 3, 3)
+    m00, m01, m02 = flat[:, 0, 0], flat[:, 0, 1], flat[:, 0, 2]
+    m10, m11, m12 = flat[:, 1, 0], flat[:, 1, 1], flat[:, 1, 2]
+    m20, m21, m22 = flat[:, 2, 0], flat[:, 2, 1], flat[:, 2, 2]
+
+    # Shepperd's method: four algebraically equivalent quaternion derivations,
+    # each numerically stable when its own discriminant is the largest, which is
+    # what keeps this accurate at theta -> pi where an acos-based rotvec is
+    # singular. Every branch is evaluated and selected with torch.where instead
+    # of boolean-mask indexing, which costs a nonzero+gather+scatter per branch
+    # on this per-sample dataloader path. A branch whose discriminant is negative
+    # clamps to scale=0 and produces large-but-finite values that torch.where
+    # discards, so the selected branch is bit-identical to evaluating it alone.
+    def branch_scale(discriminant: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        scale = torch.sqrt(discriminant.clamp_min(0.0)) * 2.0
+        return scale, scale.clamp_min(1e-8)
+
+    trace_scale, trace_divisor = branch_scale(m00 + m11 + m22 + 1.0)
+    quat_trace = torch.stack(
+        [
+            0.25 * trace_scale,
+            (m21 - m12) / trace_divisor,
+            (m02 - m20) / trace_divisor,
+            (m10 - m01) / trace_divisor,
+        ],
         dim=-1,
     )
-    sin_theta = torch.sin(theta)
-    scale = torch.where(sin_theta.abs() > 1e-6, theta / (2.0 * sin_theta).clamp_min(1e-8), torch.full_like(theta, 0.5))
-    return vee * scale.unsqueeze(-1)
+
+    x_scale, x_divisor = branch_scale(1.0 + m00 - m11 - m22)
+    quat_x = torch.stack(
+        [
+            (m21 - m12) / x_divisor,
+            0.25 * x_scale,
+            (m01 + m10) / x_divisor,
+            (m02 + m20) / x_divisor,
+        ],
+        dim=-1,
+    )
+
+    y_scale, y_divisor = branch_scale(1.0 + m11 - m00 - m22)
+    quat_y = torch.stack(
+        [
+            (m02 - m20) / y_divisor,
+            (m01 + m10) / y_divisor,
+            0.25 * y_scale,
+            (m12 + m21) / y_divisor,
+        ],
+        dim=-1,
+    )
+
+    z_scale, z_divisor = branch_scale(1.0 + m22 - m00 - m11)
+    quat_z = torch.stack(
+        [
+            (m10 - m01) / z_divisor,
+            (m02 + m20) / z_divisor,
+            (m12 + m21) / z_divisor,
+            0.25 * z_scale,
+        ],
+        dim=-1,
+    )
+
+    use_trace = ((m00 + m11 + m22) > 0.0).unsqueeze(-1)
+    use_x = ((m00 >= m11) & (m00 >= m22)).unsqueeze(-1)
+    use_y = (m11 >= m22).unsqueeze(-1)
+    quat = torch.where(use_trace, quat_trace, torch.where(use_x, quat_x, torch.where(use_y, quat_y, quat_z)))
+    return _quat_to_rotvec_wxyz(quat).reshape(*r.shape[:-2], 3)
 
 
 def _rotation_matrix_from_config(value: Any, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
@@ -733,10 +959,16 @@ def _pose_semantics(kind: str, adapter: dict[str, Any], component: dict[str, Any
     return None
 
 
-def _transform_xyz_rotvec_pose(pose: torch.Tensor, frame_transform: dict[str, Any], *, is_delta: bool) -> torch.Tensor:
+def _transform_xyz_matrix_pose(
+    xyz: torch.Tensor,
+    rotation: torch.Tensor,
+    frame_transform: dict[str, Any],
+    *,
+    is_delta: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
     if not frame_transform:
-        return pose
-    dtype, device = pose.dtype, pose.device
+        return xyz, rotation
+    dtype, device = rotation.dtype, rotation.device
     world_from_source = _rotation_matrix_from_config(
         frame_transform.get("world_from_source", frame_transform.get("canonical_world_from_source_world")),
         dtype=dtype,
@@ -761,8 +993,6 @@ def _transform_xyz_rotvec_pose(pose: torch.Tensor, frame_transform: dict[str, An
         )
         canonical_ee_from_source = source_ee_from_canonical.transpose(-1, -2)
 
-    xyz = pose[..., :3]
-    rot = _rotvec_to_matrix(pose[..., 3:6])
     if is_delta:
         delta_frame = str(
             frame_transform.get(
@@ -772,34 +1002,23 @@ def _transform_xyz_rotvec_pose(pose: torch.Tensor, frame_transform: dict[str, An
         ).lower()
         if delta_frame in {"eef_local", "ee_local", "local", "source_ee", "source_local"}:
             xyz_out = torch.einsum("ij,...j->...i", canonical_ee_from_source, xyz)
-            rot_out = canonical_ee_from_source @ rot @ canonical_ee_from_source.transpose(-1, -2)
+            rot_out = canonical_ee_from_source @ rotation @ canonical_ee_from_source.transpose(-1, -2)
         else:
             xyz_out = torch.einsum("ij,...j->...i", world_from_source, xyz)
-            rot_out = world_from_source @ rot @ world_from_source.transpose(-1, -2)
+            rot_out = world_from_source @ rotation @ world_from_source.transpose(-1, -2)
     else:
         xyz_out = torch.einsum("ij,...j->...i", world_from_source, xyz)
-        rot_out = world_from_source @ rot @ source_ee_from_canonical
-    return torch.cat([xyz_out, _matrix_to_rotvec(rot_out)], dim=-1)
+        rot_out = world_from_source @ rotation @ source_ee_from_canonical
+    return xyz_out, rot_out
 
 
-def _pose_delta_from_transformed_xyz_rotvec(current_pose: torch.Tensor, future_pose: torch.Tensor) -> torch.Tensor:
-    current_rot = _rotvec_to_matrix(current_pose[..., 3:6])
-    future_rot = _rotvec_to_matrix(future_pose[..., 3:6])
-    current_from_world = current_rot.transpose(-1, -2)
-    delta_xyz_world = future_pose[..., :3] - current_pose[..., :3]
-    delta_xyz_local = torch.einsum("...ij,...j->...i", current_from_world, delta_xyz_world)
-    delta_rot = current_from_world @ future_rot
-    return torch.cat([delta_xyz_local, _matrix_to_rotvec(delta_rot)], dim=-1)
-
-
-def _pose_delta_world_from_transformed_xyz_rotvec(
-    current_pose: torch.Tensor, future_pose: torch.Tensor
-) -> torch.Tensor:
-    current_rot = _rotvec_to_matrix(current_pose[..., 3:6])
-    future_rot = _rotvec_to_matrix(future_pose[..., 3:6])
-    delta_xyz_world = future_pose[..., :3] - current_pose[..., :3]
-    delta_rot = current_rot.transpose(-1, -2) @ future_rot
-    return torch.cat([delta_xyz_world, _matrix_to_rotvec(delta_rot)], dim=-1)
+def _pose_delta_world_from_transformed_xyz_matrix(
+    current_pose: tuple[torch.Tensor, torch.Tensor],
+    future_pose: tuple[torch.Tensor, torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    current_xyz, current_rotation = current_pose
+    future_xyz, future_rotation = future_pose
+    return future_xyz - current_xyz, current_rotation.transpose(-1, -2) @ future_rotation
 
 
 def _assign_target_indices(
@@ -983,14 +1202,24 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         use_path_index_cache: bool = True,
         shared_parquet_cache: Any | None = None,
         local_video_path_decode: bool = True,
+        direct_parquet_row_group_read: bool = False,
+        local_parquet_cache_dir: str | Path | None = None,
     ):
         self.spec = spec
         self.local_video_path_decode = bool(local_video_path_decode)
+        self.direct_parquet_row_group_read = bool(direct_parquet_row_group_read)
+        self.local_parquet_cache_dir = (
+            str(Path(local_parquet_cache_dir).expanduser()) if local_parquet_cache_dir not in (None, "") else None
+        )
         self._client: LocalFileClient | None = None
         self.name = spec.name  # petrel/dataset_groups/xxx-dataset/xxx-task.yaml-datasets-name
-        self.remote_root = spec.remote_root.rstrip("/") # dataset_groups/xxx-dataset/xxx-task.yaml-(root+datasets/path)
-        self.modalities = spec.modalities or {} # /petrel/(dataset_groups/xxx-task.yaml+/control_profiles/xxx-dataset.yaml)-(fields+fields)
-        self.canonical_adapter = spec.canonical_adapter or {} # /petrel/(dataset_groups/xxx-task.yaml+/control_profiles/xxx-dataset.yaml)-(mapping+mapping_overrides)
+        self.remote_root = spec.remote_root.rstrip("/")  # dataset_groups/xxx-dataset/xxx-task.yaml-(root+datasets/path)
+        self.modalities = (
+            spec.modalities or {}
+        )  # /petrel/(dataset_groups/xxx-task.yaml+/control_profiles/xxx-dataset.yaml)-(fields+fields)
+        self.canonical_adapter = (
+            spec.canonical_adapter or {}
+        )  # /petrel/(dataset_groups/xxx-task.yaml+/control_profiles/xxx-dataset.yaml)-(mapping+mapping_overrides)
         self.canonical_dim = _canonical_adapter_dim(self.canonical_adapter)
         self.use_canonical_adapter = self.canonical_dim is not None
         # List: dataset_groups/xxx-task.yaml-state.keys
@@ -1071,11 +1300,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         t0 = time.perf_counter()
         # Dict data/petrel_cache/meta/InternData-A1_v30/articulation_tasks/lift2/close_the_microwave_left_arm_part1/tasks.parquet
         # {task_index: task_prompt}
-        self.tasks = self._read_tasks() 
+        self.tasks = self._read_tasks()
         self.task_to_index = {task: task_index for task_index, task in self.tasks.items()}
         _profile_record("dataset.read_tasks", time.perf_counter() - t0, dataset=self.name, count=len(self.tasks))
         # which dataset use segment text
-        self.segment_action_text_enabled = self._should_use_segment_action_text()   # return true or false
+        self.segment_action_text_enabled = self._should_use_segment_action_text()  # return true or false
         self.subtask_action_segments: dict[int, tuple[tuple[int, int, str], ...]] = {}
 
         # openpi/data/petrel_cache/path_index/InternData-A1_v30/articulation_tasks/franka/close_the_electriccooker/path_index.jsonl
@@ -1342,8 +1571,10 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         self.selected_episodes = list(episodes) if episodes is not None else sorted(self.episodes_dict)
         self.episode_lengths = [int(self.episodes_dict[ep]["length"]) for ep in self.selected_episodes]
         self.cumulative_lengths = np.cumsum(self.episode_lengths).tolist()
-        self.trajectory_ids = np.asarray(self.selected_episodes, dtype=np.int64)  #[0, 1, 2, 3 ...]
-        self.trajectory_lengths = np.asarray(self.episode_lengths, dtype=np.int64)  # [episode0_length, episode1_length, ....]
+        self.trajectory_ids = np.asarray(self.selected_episodes, dtype=np.int64)  # [0, 1, 2, 3 ...]
+        self.trajectory_lengths = np.asarray(
+            self.episode_lengths, dtype=np.int64
+        )  # [episode0_length, episode1_length, ....]
         self.max_delta_index = max(self.num_frames_per_sample - 1, self.action_size - 1) * self.global_sample_stride
         self._load_local_frame_filter()  # TODO
 
@@ -1593,7 +1824,10 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         if self._client is None:
             if not self.spec.local_root:
                 raise ValueError(f"Local dataset {self.name!r} is missing local_root.")
-            self._client = LocalFileClient(self.spec.local_root)
+            self._client = LocalFileClient(
+                self.spec.local_root,
+                parquet_cache_dir=getattr(self, "local_parquet_cache_dir", None),
+            )
         return self._client
 
     @property
@@ -2190,6 +2424,56 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         rel_path = self._data_rel_path(episode_index)
 
         def read_filtered_table(path: str) -> tuple[Any, int, int]:
+            if self.direct_parquet_row_group_read:
+                local_path = self.client.resolve_parquet_path(self._remote_path(path))
+                direct_started = time.perf_counter()
+                try:
+                    parquet_file = pq.ParquetFile(local_path)
+                    available_columns = set(parquet_file.schema_arrow.names)
+                    columns = [col for col in self._needed_parquet_columns() if col in available_columns]
+                    source_episode_index = self.source_episode_index(int(episode_index))
+                    row_groups = _parquet_row_groups_for_episode(
+                        parquet_file,
+                        source_episode_index=source_episode_index,
+                        index_bounds=self._v3_episode_data_bounds(int(episode_index)) if self.is_v3 else None,
+                    )
+                    if row_groups:
+                        # DataLoader already parallelizes across many worker processes. Avoid
+                        # creating an additional Arrow thread pool inside every worker.
+                        table = parquet_file.read_row_groups(row_groups, columns=columns, use_threads=False)
+                    else:
+                        table = parquet_file.read(columns=columns, use_threads=False)
+                    table = self._filter_episode_table(table, int(episode_index))
+                except Exception as exc:
+                    _profile_record(
+                        "parquet.direct_row_group_fallback",
+                        time.perf_counter() - direct_started,
+                        episode=episode_index,
+                        path=local_path.name,
+                    )
+                    logging.warning(
+                        "Direct parquet row-group read failed for %s; falling back to bytes: %s", local_path, exc
+                    )
+                else:
+                    elapsed = time.perf_counter() - direct_started
+                    bytes_read = (
+                        sum(parquet_file.metadata.row_group(row_group).total_byte_size for row_group in row_groups)
+                        if row_groups
+                        else local_path.stat().st_size
+                    )
+                    _profile_record(
+                        "parquet.direct_row_group_read",
+                        elapsed,
+                        episode=episode_index,
+                        bytes=bytes_read,
+                        columns=len(columns),
+                        rows=table.num_rows,
+                        row_groups=len(row_groups),
+                        total_row_groups=parquet_file.metadata.num_row_groups,
+                        path=local_path.name,
+                    )
+                    return table, int(bytes_read), len(columns)
+
             raw = self._read_bytes(path)
             t0 = time.perf_counter()
             parquet_file = pq.ParquetFile(BytesIO(raw))
@@ -2366,35 +2650,37 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
     def _canonical_frame_transform(self, component: dict[str, Any], kind: str) -> dict[str, Any]:
         return _merge_frame_transform(self.canonical_adapter, component, kind)
 
-    def _canonical_transform_pose(   # 改变坐标轴的含义 统一不同数据集的运动方向
+    def _canonical_transform_pose_matrix(  # 改变坐标轴的含义 统一不同数据集的运动方向
         self,
-        pose: torch.Tensor,
+        xyz: torch.Tensor,
+        rotation: torch.Tensor,
         component: dict[str, Any],
         kind: str,
         pose_input: str,
         *,
         is_delta: bool | None = None,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if is_delta is None:
             is_delta = _pose_is_delta(kind, pose_input, self.canonical_adapter, component)
-        return _transform_xyz_rotvec_pose(
-            pose,
+        return _transform_xyz_matrix_pose(
+            xyz,
+            rotation,
             self._canonical_frame_transform(component, kind),
             is_delta=bool(is_delta),
         )
 
-    def _canonical_absolute_pose_from_component(
+    def _canonical_absolute_pose_matrix_from_component(
         self,
         parquet: dict[str, torch.Tensor | list[Any]],
         component: dict[str, Any],
         indices: list[int],
         kind: str,
-    ) -> torch.Tensor | None:
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
         pose_input = self._canonical_pose_input(component, kind)
         direct = self._canonical_component_tensor(parquet, component, indices, kind)
         if direct is not None:
-            pose = _pose_to_xyz_rotvec(direct, pose_input)
-            return self._canonical_transform_pose(pose, component, kind, pose_input, is_delta=False)
+            xyz, rotation = _pose_to_xyz_matrix(direct, pose_input)
+            return self._canonical_transform_pose_matrix(xyz, rotation, component, kind, pose_input, is_delta=False)
 
         pos_key = component.get(f"{kind}_position_key") or component.get("position_key")
         rot_key = (
@@ -2413,18 +2699,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             or component.get("rotation_slice")
             or component.get("orientation_slice")
         )
-        pos = _select_feature(parquet, str(pos_key), indices, pos_slice)
-        rot = _select_feature(parquet, str(rot_key), indices, rot_slice)
-        if pos.shape[-1] != 3:
-            raise ValueError(f"Canonical ee position expects 3 dims from {pos_key!r}, got {pos.shape[-1]}")
-        if rot.shape[-1] == 4:
-            rotvec = _quat_to_rotvec_xyzw(rot) if "xyzw" in pose_input else _quat_to_rotvec_wxyz(rot)
-        elif rot.shape[-1] == 3:
-            rotvec = _rpy_to_rotvec(rot)
-        else:
-            raise ValueError(f"Canonical ee rotation expects 3 or 4 dims from {rot_key!r}, got {rot.shape[-1]}")
-        pose = torch.cat([pos, rotvec], dim=-1)
-        return self._canonical_transform_pose(pose, component, kind, pose_input, is_delta=False)
+        xyz = _select_feature(parquet, str(pos_key), indices, pos_slice)
+        rotation = _split_rotation_to_matrix(_select_feature(parquet, str(rot_key), indices, rot_slice), pose_input)
+        if xyz.shape[-1] != 3:
+            raise ValueError(f"Canonical ee position expects 3 dims from {pos_key!r}, got {xyz.shape[-1]}")
+        return self._canonical_transform_pose_matrix(xyz, rotation, component, kind, pose_input, is_delta=False)
 
     def _canonical_pose_from_component(
         self,
@@ -2448,28 +2727,41 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                     raise ValueError(
                         f"canonical_adapter for {self.name} uses action_from_state_delta without next_indices"
                     )
-                current_pose = self._canonical_absolute_pose_from_component(parquet, component, indices, "state")
-                future_pose = self._canonical_absolute_pose_from_component(parquet, component, next_indices, "state")
+                current_pose = self._canonical_absolute_pose_matrix_from_component(parquet, component, indices, "state")
+                future_pose = self._canonical_absolute_pose_matrix_from_component(
+                    parquet, component, next_indices, "state"
+                )
                 if current_pose is None or future_pose is None:
                     return None
-                pose = _pose_delta_world_from_transformed_xyz_rotvec(current_pose, future_pose)
-                return _format_xyz_rotvec_pose(pose, _pose_output_format(kind, self.canonical_adapter, component))
+                xyz, rotation = _pose_delta_world_from_transformed_xyz_matrix(current_pose, future_pose)
+                return _format_xyz_matrix_pose(
+                    xyz, rotation, _pose_output_format(kind, self.canonical_adapter, component)
+                )
 
             semantic = _pose_semantics(kind, self.canonical_adapter, component)
             if semantic in {"absolute", "absolute_target", "target", "target_pose"}:
-                current_pose = self._canonical_absolute_pose_from_component(
+                target_pose = self._canonical_absolute_pose_matrix_from_component(
+                    parquet, component, selected_indices, "action"
+                )
+                if target_pose is None:
+                    return None
+                if component.get("target_action_semantics") == "absolute":
+                    return _format_xyz_matrix_pose(
+                        *target_pose,
+                        _pose_output_format(kind, self.canonical_adapter, component),
+                    )
+                current_pose = self._canonical_absolute_pose_matrix_from_component(
                     parquet,
                     component,
                     reference_indices if reference_indices is not None else indices,
                     "state",
                 )
-                target_pose = self._canonical_absolute_pose_from_component(
-                    parquet, component, selected_indices, "action"
-                )
-                if current_pose is None or target_pose is None:
+                if current_pose is None:
                     return None
-                pose = _pose_delta_world_from_transformed_xyz_rotvec(current_pose, target_pose)  #绝对动作转换为相对动作
-                return _format_xyz_rotvec_pose(pose, _pose_output_format(kind, self.canonical_adapter, component)) 
+                xyz, rotation = _pose_delta_world_from_transformed_xyz_matrix(current_pose, target_pose)
+                return _format_xyz_matrix_pose(
+                    xyz, rotation, _pose_output_format(kind, self.canonical_adapter, component)
+                )
 
             state_delta_key = component.get("state_delta_key")
             if state_delta_key:
@@ -2482,8 +2774,13 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                     parquet, str(state_delta_key), next_indices, _component_raw_slice(component, "state")
                 )
                 pose = _pose_delta_xyz_rotvec(current, future, pose_input)
-                pose = self._canonical_transform_pose(pose, component, kind, pose_input, is_delta=True)
-                return _format_xyz_rotvec_pose(pose, _pose_output_format(kind, self.canonical_adapter, component))
+                xyz, rotation = _pose_to_xyz_matrix(pose, "xyz_rotvec")
+                xyz, rotation = self._canonical_transform_pose_matrix(
+                    xyz, rotation, component, kind, pose_input, is_delta=True
+                )
+                return _format_xyz_matrix_pose(
+                    xyz, rotation, _pose_output_format(kind, self.canonical_adapter, component)
+                )
 
             state_future_key = component.get("state_future_key")
             if state_future_key:
@@ -2492,15 +2789,19 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                 future = _select_feature(
                     parquet, str(state_future_key), next_indices, _component_raw_slice(component, "state")
                 )
-                pose = _pose_to_xyz_rotvec(future, pose_input)
-                pose = self._canonical_transform_pose(pose, component, kind, pose_input, is_delta=False)
-                return _format_xyz_rotvec_pose(pose, _pose_output_format(kind, self.canonical_adapter, component))
+                xyz, rotation = _pose_to_xyz_matrix(future, pose_input)
+                xyz, rotation = self._canonical_transform_pose_matrix(
+                    xyz, rotation, component, kind, pose_input, is_delta=False
+                )
+                return _format_xyz_matrix_pose(
+                    xyz, rotation, _pose_output_format(kind, self.canonical_adapter, component)
+                )
 
         direct = self._canonical_component_tensor(parquet, component, selected_indices, kind)
         if direct is not None:
-            pose = _pose_to_xyz_rotvec(direct, pose_input)  
-            pose = self._canonical_transform_pose(pose, component, kind, pose_input)
-            return _format_xyz_rotvec_pose(pose, _pose_output_format(kind, self.canonical_adapter, component))
+            xyz, rotation = _pose_to_xyz_matrix(direct, pose_input)
+            xyz, rotation = self._canonical_transform_pose_matrix(xyz, rotation, component, kind, pose_input)
+            return _format_xyz_matrix_pose(xyz, rotation, _pose_output_format(kind, self.canonical_adapter, component))
 
         pos_key = component.get(f"{kind}_position_key") or component.get("position_key")
         rot_key = (
@@ -2519,20 +2820,14 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             or component.get("rotation_slice")
             or component.get("orientation_slice")
         )
-        pos = _select_feature(parquet, str(pos_key), selected_indices, pos_slice)
-        rot = _select_feature(parquet, str(rot_key), selected_indices, rot_slice)
-        if pos.shape[-1] != 3:
-            raise ValueError(f"Canonical ee position expects 3 dims from {pos_key!r}, got {pos.shape[-1]}")
-        if rot.shape[-1] == 4:
-            pose_input = str(self.canonical_adapter.get("pose_input") or "split_xyz_xyzw")
-            rotvec = _quat_to_rotvec_xyzw(rot) if "xyzw" in pose_input else _quat_to_rotvec_wxyz(rot)
-        elif rot.shape[-1] == 3:
-            rotvec = _rpy_to_rotvec(rot)
-        else:
-            raise ValueError(f"Canonical ee rotation expects 3 or 4 dims from {rot_key!r}, got {rot.shape[-1]}")
-        pose = torch.cat([pos, rotvec], dim=-1)
-        pose = self._canonical_transform_pose(pose, component, kind, pose_input)
-        return _format_xyz_rotvec_pose(pose, _pose_output_format(kind, self.canonical_adapter, component))
+        xyz = _select_feature(parquet, str(pos_key), selected_indices, pos_slice)
+        rotation_value = _select_feature(parquet, str(rot_key), selected_indices, rot_slice)
+        if xyz.shape[-1] != 3:
+            raise ValueError(f"Canonical ee position expects 3 dims from {pos_key!r}, got {xyz.shape[-1]}")
+        pose_input = str(self.canonical_adapter.get("pose_input") or "split_xyz_xyzw")
+        rotation = _split_rotation_to_matrix(rotation_value, pose_input)
+        xyz, rotation = self._canonical_transform_pose_matrix(xyz, rotation, component, kind, pose_input)
+        return _format_xyz_matrix_pose(xyz, rotation, _pose_output_format(kind, self.canonical_adapter, component))
 
     def _canonical_project(
         self,
@@ -2674,9 +2969,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         if not frame_indices:
             return []
         parquet = self._load_episode_parquet(episode_index)
-        return [
-            self._get_step_item_from_parquet(episode_index, int(frame_idx), parquet) for frame_idx in frame_indices
-        ]
+        return [self._get_step_item_from_parquet(episode_index, int(frame_idx), parquet) for frame_idx in frame_indices]
 
     def _get_step_item_from_parquet(
         self,
@@ -2813,15 +3106,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             action_indices, action_pad = self._query_indices_batch(starts, episode_len, self.action_size)
             source_state_indices = self.source_frame_indices(int(episode_index), state_indices)
             source_action_indices = self.source_frame_indices(int(episode_index), action_indices)
-            state_reference_indices = (
-                torch.as_tensor(source_state_indices, dtype=torch.long)
-                .reshape(num_windows, self.num_frames_per_sample)[:, 0]
-            )
+            state_reference_indices = torch.as_tensor(source_state_indices, dtype=torch.long).reshape(
+                num_windows, self.num_frames_per_sample
+            )[:, 0]
             source_action_reference_indices = (
-                state_reference_indices[:, None]
-                .expand(num_windows, self.action_size)
-                .reshape(-1)
-                .tolist()
+                state_reference_indices[:, None].expand(num_windows, self.action_size).reshape(-1).tolist()
             )
             action_next_indices = (
                 torch.as_tensor(action_indices, dtype=torch.long)
@@ -2958,7 +3247,7 @@ class MixedPetrelLeRobotDataset(torch.utils.data.Dataset):
         self.epoch = 0
         # info action shape sum
         max_action_dim = max((int(ds.action_dim or 0) for ds in datasets), default=0) or None
-        # info state shape sum 
+        # info state shape sum
         max_state_dim = max((int(ds.state_dim or 0) for ds in datasets), default=0) or None
         for ds in datasets:
             ds.set_target_dims(
@@ -3379,7 +3668,7 @@ def _distributed_dataset_weights(
     allow_padding_at_end: bool = False,
 ) -> list[float]:
     weights = [float(spec.dataset_weight) for spec in specs]
-    valid_lengths = [max(int(ds.valid_start_counts(allow_padding_at_end).sum()), 1) for ds in datasets]  
+    valid_lengths = [max(int(ds.valid_start_counts(allow_padding_at_end).sum()), 1) for ds in datasets]
     for group_id in sorted({spec.group_id for spec in specs if spec.distribute_weights}):
         indices = [i for i, spec in enumerate(specs) if spec.group_id == group_id]
         total_len = sum(valid_lengths[i] for i in indices)
@@ -3404,6 +3693,7 @@ def _resolve_include_path(path: str | Path, config_dir: Path) -> Path:
     if not out.is_absolute():
         out = config_dir / out
     return out
+
 
 def _merge_config_includes(payload: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     projection_files = payload.get("projection_files", payload.get("projection_file", []))
@@ -3545,9 +3835,7 @@ def _pose_output_dim(value: str) -> int:
 
 def _control_slot_indices(value: Any, *, dim: int, path: str) -> list[int]:
     if not isinstance(value, dict) or set(value) != {"indices"}:
-        raise TypeError(
-            f"source_control_space slot {path} must be a mapping containing only indices, got {value!r}."
-        )
+        raise TypeError(f"source_control_space slot {path} must be a mapping containing only indices, got {value!r}.")
     raw_indices = value["indices"]
     if not isinstance(raw_indices, (list, tuple)):
         raise TypeError(f"source_control_space slot {path}.indices must be a list.")
@@ -3614,8 +3902,7 @@ def _validate_source_control_space(value: Any, contract: dict[str, Any]) -> dict
     }
     if invalid_semantics:
         raise ValueError(
-            "source_control_space.action_semantics values must be absolute or delta; "
-            f"got {invalid_semantics}."
+            f"source_control_space.action_semantics values must be absolute or delta; got {invalid_semantics}."
         )
     return {
         **value,
@@ -3643,7 +3930,9 @@ def _raw_component_width(component: dict[str, Any], kind: str, fallback: int) ->
     return end - start
 
 
-def _resolve_control_adapter(mapping: dict[str, Any], control_space: dict[str, Any], *, profile_name: str) -> dict[str, Any]:
+def _resolve_control_adapter(
+    mapping: dict[str, Any], control_space: dict[str, Any], *, profile_name: str
+) -> dict[str, Any]:
     adapter = copy.deepcopy(mapping)
     adapter["layout"] = control_space["name"]
     adapter["dim"] = int(control_space["dim"])
@@ -3665,9 +3954,7 @@ def _resolve_control_adapter(mapping: dict[str, Any], control_space: dict[str, A
                 continue
             target_slot = component.get("target_slot")
             if not isinstance(target_slot, str) or not target_slot:
-                raise ValueError(
-                    f"Control profile {profile_name!r} {side_name}.{component_name} requires target_slot."
-                )
+                raise ValueError(f"Control profile {profile_name!r} {side_name}.{component_name} requires target_slot.")
             target_parts = target_slot.split(".")
             if len(target_parts) != 2:
                 raise ValueError(f"target_slot must use '<side>.<component>', got {target_slot!r}.")
@@ -3703,17 +3990,24 @@ def _resolve_control_adapter(mapping: dict[str, Any], control_space: dict[str, A
                         )
                     claimed[kind][index] = f"{side_name}.{component_name}"
 
-            target_semantic = control_space["action_semantics"].get(str(component_name), "absolute")
+            # EE poses are carried as a delta from the current state unless the
+            # control space says otherwise; every other component defaults to the
+            # raw absolute value it already stores.
+            default_semantic = "delta" if component_name == "ee" else "absolute"
+            target_semantic = control_space["action_semantics"].get(str(component_name), default_semantic)
             source_semantic = str(component.get("action_semantics", "absolute"))
-            if component_name != "ee" and target_semantic == "delta" and source_semantic == "absolute":
+            if component_name == "ee":
+                component["target_action_semantics"] = target_semantic
+            elif target_semantic == "delta" and source_semantic == "absolute":
                 delta_from_state_indices.extend(component.get("action_target_indices", ()))
-            elif component_name != "ee" and target_semantic != source_semantic:
+            elif target_semantic != source_semantic:
                 raise ValueError(
                     f"Control profile {profile_name!r} cannot convert {side_name}.{component_name} "
                     f"from {source_semantic!r} to {target_semantic!r}."
                 )
     adapter["delta_from_state_indices"] = sorted(set(delta_from_state_indices))
     return adapter
+
 
 def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -> dict[str, Any]:
     """Validate openpi_petrel_v1 and translate it to the reader's internal dataset specs."""
@@ -3922,9 +4216,7 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
             raise ValueError(f"dataset_groups[{index}].root must be a non-empty string.")
         root_path = Path(root)
         if root_path.is_absolute() or ":" in root.split("/", 1)[0] or ".." in root_path.parts:
-            raise ValueError(
-                f"dataset_groups[{index}].root must be relative to storage.local_root, got {root!r}."
-            )
+            raise ValueError(f"dataset_groups[{index}].root must be relative to storage.local_root, got {root!r}.")
         robot_id = group.get("robot_id")
         if robot_id is None:
             root_parts = tuple(part for part in root_path.parts if part not in {"", "."})
@@ -3994,6 +4286,8 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
         "storage": {  # TODO
             "local_root": storage.get("local_root"),
             "parquet_cache_size": int(storage.get("parquet_cache_size", 8)),
+            "direct_parquet_row_group_read": bool(storage.get("direct_parquet_row_group_read", False)),
+            "local_parquet_cache_dir": storage.get("local_parquet_cache_dir"),
         },
         "sampling": {
             "num_frames": int(sampling.get("state_frames", 1)),
@@ -4009,6 +4303,9 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
             "training_block_size": int(sampling.get("training_block_size", 1)),
             "training_frame_stride": int(sampling.get("training_frame_stride", 1)),
         },
+        "norm_stats": {
+            "action_by_horizon": bool(norm_grouping.get("action_by_horizon", True)),
+        },
         "cache_templates": cache_templates,
         "frame_filter": frame_filter_config,
         "dataset_defaults": {
@@ -4023,7 +4320,7 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
         "canonical_action_space": control_space,
         "source_control_space": control_space,
         "embodiments": legacy_profiles,  # number = embodimets numbers
-        "sources": legacy_sources,   # number = sub_datasets numbsers  xxx-dataset/xxx-tasks number
+        "sources": legacy_sources,  # number = sub_datasets numbsers  xxx-dataset/xxx-tasks number
         "_config_dir": str(config_dir),
     }
 
@@ -4062,16 +4359,19 @@ def _validate_openpi_petrel_metadata(payload: dict[str, Any]) -> tuple[str, dict
         raise ValueError("openpi_petrel_v1 control_projection must be 'mapped'.")
     return dataset_id, contract
 
+
 def _resolve_openpi_petrel_path(config_path: str | Path) -> Path:
     path = Path(config_path).expanduser()
     if not path.is_absolute():
         path = OPENPI_REPO_ROOT / path
     return path.resolve()
 
+
 def read_openpi_petrel_metadata(config_path: str | Path) -> tuple[str, dict[str, Any]]:
     """Read the global dataset id and OpenPI contract without scanning dataset-group YAMLs."""
     payload = _read_yaml_or_json(_resolve_openpi_petrel_path(config_path))
     return _validate_openpi_petrel_metadata(payload)
+
 
 def read_openpi_petrel_config(config_path: str | Path) -> dict[str, Any]:
     """Read and validate an openpi_petrel_v1 YAML without accessing remote data."""
@@ -4094,9 +4394,85 @@ def load_dataset_specs(
     configured_root = local_root or storage.get("local_root")
     if not configured_root:
         raise ValueError("Local storage requires local_root in YAML or the command-line override.")
-    resolved_root = Path(str(configured_root)).expanduser().resolve()
-    if not resolved_root.is_dir():
-        raise FileNotFoundError(f"Local dataset root does not exist or is not a directory: {resolved_root}")
+
+    distributed = (
+        torch.distributed.is_available()
+        and torch.distributed.is_initialized()
+        and torch.distributed.get_world_size() > 1
+    )
+    rank = torch.distributed.get_rank() if distributed else 0
+    validation_result: list[dict[str, str | None] | None] = [None]
+    local_specs: list[DatasetSpec] | None = None
+
+    if not distributed or rank == 0:
+        scan_started = time.perf_counter()
+        if distributed:
+            parent_count = len({Path(spec.remote_root).parent for spec in specs})
+            print(
+                f"[petrel-init][rank=0] AOSS scan started specs={len(specs)} parents={parent_count}",
+                flush=True,
+            )
+        try:
+            resolved_root = Path(str(configured_root)).expanduser().resolve()
+            if not resolved_root.is_dir():
+                raise FileNotFoundError(f"Local dataset root does not exist or is not a directory: {resolved_root}")
+            local_specs = _localize_dataset_specs(specs, resolved_root, validate_directories=True)
+            validation_result[0] = {"resolved_root": str(resolved_root), "error": None}
+            if distributed:
+                print(
+                    f"[petrel-init][rank=0] AOSS scan completed elapsed_s={time.perf_counter() - scan_started:.3f}",
+                    flush=True,
+                )
+        except Exception as exc:
+            if not distributed:
+                raise
+            print(
+                f"[petrel-init][rank=0] AOSS scan failed elapsed_s={time.perf_counter() - scan_started:.3f} "
+                f"error_type={type(exc).__name__}",
+                flush=True,
+            )
+            validation_result[0] = {
+                "resolved_root": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    if distributed:
+        broadcast_started = time.perf_counter()
+        torch.distributed.broadcast_object_list(validation_result, src=0)
+        if rank == 0:
+            print(
+                f"[petrel-init][rank=0] broadcast completed elapsed_s={time.perf_counter() - broadcast_started:.3f}",
+                flush=True,
+            )
+        result = validation_result[0]
+        if result is None:
+            raise RuntimeError("Rank 0 did not broadcast a dataset root validation result.")
+        if result["error"] is not None:
+            raise RuntimeError(f"Rank 0 dataset root validation failed: {result['error']}")
+        resolved_root_value = result["resolved_root"]
+        if resolved_root_value is None:
+            raise RuntimeError("Rank 0 dataset root validation did not provide a resolved root.")
+        resolved_root = Path(resolved_root_value)
+        if rank != 0:
+            local_specs = _localize_dataset_specs(specs, resolved_root, validate_directories=False)
+
+    assert local_specs is not None
+    storage["local_root"] = str(resolved_root)
+    return config, local_specs
+
+
+def _localize_dataset_specs(
+    specs: list[DatasetSpec],
+    resolved_root: Path,
+    *,
+    validate_directories: bool,
+) -> list[DatasetSpec]:
+    """Resolve dataset roots, optionally validating directory existence.
+
+    Distributed training validates mounted dataset directories on rank 0 only.
+    Other ranks and DataLoader workers reuse already-resolved specs and must not
+    enumerate the AOSS mount independently.
+    """
 
     local_specs: list[DatasetSpec] = []
     missing_local_roots: list[Path] = []
@@ -4104,21 +4480,23 @@ def load_dataset_specs(
     for spec in specs:
         relative_root = Path(spec.remote_root)
         if relative_root.is_absolute() or ".." in relative_root.parts:
-            raise ValueError(
-                f"Dataset root must be relative to storage.local_root, got {spec.remote_root!r}."
-            )
-        local_dataset_root = (resolved_root / relative_root).resolve()
+            raise ValueError(f"Dataset root must be relative to storage.local_root, got {spec.remote_root!r}.")
+        # resolved_root is canonicalized by rank 0 and relative_root has already
+        # rejected absolute paths and '..'. Keep this join lexical so non-zero
+        # ranks and DataLoader workers do not stat the AOSS path via Path.resolve().
+        local_dataset_root = resolved_root / relative_root
         if not local_dataset_root.is_relative_to(resolved_root):
             raise ValueError(f"Dataset root escapes storage.local_root: {local_dataset_root}")
-        parent = local_dataset_root.parent
-        if parent not in local_children:
-            try:
-                local_children[parent] = {entry.name for entry in os.scandir(parent) if entry.is_dir()}
-            except OSError:
-                local_children[parent] = set()
-        if local_dataset_root.name not in local_children[parent]:
-            missing_local_roots.append(local_dataset_root)
-            continue
+        if validate_directories:
+            parent = local_dataset_root.parent
+            if parent not in local_children:
+                try:
+                    local_children[parent] = {entry.name for entry in os.scandir(parent) if entry.is_dir()}
+                except OSError:
+                    local_children[parent] = set()
+            if local_dataset_root.name not in local_children[parent]:
+                missing_local_roots.append(local_dataset_root)
+                continue
         local_specs.append(
             replace(
                 spec,
@@ -4134,8 +4512,7 @@ def load_dataset_specs(
             f"{len(missing_local_roots)}/{len(specs)} configured dataset directories are missing under "
             f"{resolved_root}; first missing paths: {preview}"
         )
-    storage["local_root"] = str(resolved_root)
-    return config, local_specs
+    return local_specs
 
 
 def _get_nested(config: dict[str, Any], section: str, key: str, default: Any) -> Any:
@@ -4236,10 +4613,10 @@ def _make_spec(
     #       "dir": petrel/dataset_groups/xxx-dataset/xxx-task.yaml-datasets-path}
     if isinstance(item, str):
         item = {"dir": item}
-    
+
     remotes = inherited.get("_remotes", {}) if isinstance(inherited.get("_remotes"), dict) else {}  # {}
     remote_name = str(item.get("remote") or inherited.get("remote") or "")  # {}
-    remote_base = item.get("remote_base", inherited.get("remote_base"))   # dataset_groups/xxx-dataset/xxx-task.yaml-root
+    remote_base = item.get("remote_base", inherited.get("remote_base"))  # dataset_groups/xxx-dataset/xxx-task.yaml-root
     if not remote_base and remote_name:
         if remote_name not in remotes:
             raise KeyError(f"Unknown remote alias {remote_name!r}; available={sorted(remotes)}")
@@ -4302,7 +4679,7 @@ def _make_spec(
         embodiment=embodiment,
         dataset_id=dataset_id,
         robot_id=robot_id,
-    )  # 
+    )  #
     local_stats_value = local_stats_value or _format_template(
         inherited.get("local_stats_path_template"),
         name=dataset_name,
@@ -4315,7 +4692,7 @@ def _make_spec(
         robot_id=robot_id,
     )  # None
     path_index_value = path_index_value or _format_template(
-        inherited.get("path_index_dir_template"),  
+        inherited.get("path_index_dir_template"),
         name=dataset_name,
         path=dataset_path,
         remote=str(remote_root),
@@ -4401,7 +4778,7 @@ def _make_spec(
 
     return DatasetSpec(
         name=dataset_name,  # petrel/dataset_groups/xxx-dataset/xxx-task.yaml-datasets-name
-        remote_root=str(remote_root), # dataset_groups/xxx-dataset/xxx-task.yaml-(root+datasets/name)
+        remote_root=str(remote_root),  # dataset_groups/xxx-dataset/xxx-task.yaml-(root+datasets/name)
         stats_path=_optional_str(stats_value),  # dataset_stats.json
         local_stats_path=_optional_str(local_stats_value),  # None
         local_meta_dir=_optional_str(local_meta_value),  # data/petrel_cache/meta/{dataset_id}/{remote}
@@ -4413,23 +4790,27 @@ def _make_spec(
         frame_filter_filename=str(frame_filter_config.get("filename", "frame_filter.jsonl")),
         frame_filter_window_policy=str(frame_filter_config.get("window_policy", "full_chunk")),
         local_text_embedding_cache_dir=_optional_str(local_text_cache_value),  # None
-        context_len=int(item.get("context_len", inherited.get("context_len", 128))), # 128
-        text_encoder_id=None, # str(item.get("text_encoder_id", inherited.get("text_encoder_id", "wan22ti2v5b"))),
+        context_len=int(item.get("context_len", inherited.get("context_len", 128))),  # 128
+        text_encoder_id=None,  # str(item.get("text_encoder_id", inherited.get("text_encoder_id", "wan22ti2v5b"))),
         # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(mapping+mapping_overrides)
-        modalities=modalities, 
+        modalities=modalities,
         # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(control_profiles/fields+fields)
         canonical_adapter=_merge_mapping(inherited.get("canonical_adapter"), item.get("canonical_adapter")),
         format_version=_parse_format_major(
             item.get("format_version", item.get("format", inherited.get("format_version", inherited.get("format"))))
-        ), 
-        embodiment=embodiment, # #  dataset_groups/xxx-dataset/xxx-task.yaml-profile
+        ),
+        embodiment=embodiment,  # #  dataset_groups/xxx-dataset/xxx-task.yaml-profile
         control_schema=control_schema,  # control_type
-        stats_group=_optional_str(stats_group),  # dataset_groups/xxx-dataset/xxx-task.yaml-stats_group or stats_group_template
-        stats_group_fallbacks=tuple(stats_group_fallbacks),  # control_profiles/xxx.yaml or pi05_xxx.yaml-stats_group or stats_group_template
+        stats_group=_optional_str(
+            stats_group
+        ),  # dataset_groups/xxx-dataset/xxx-task.yaml-stats_group or stats_group_template
+        stats_group_fallbacks=tuple(
+            stats_group_fallbacks
+        ),  # control_profiles/xxx.yaml or pi05_xxx.yaml-stats_group or stats_group_template
         source_name=_optional_str(source_name),  #  dataset_groups/xxx-dataset/xxx-task.yaml-name
         dataset_weight=dataset_weight,
-        distribute_weights=distribute_weights, # True
-        action_target_dim=item.get("action_target_dim", inherited.get("action_target_dim")), # None
+        distribute_weights=distribute_weights,  # True
+        action_target_dim=item.get("action_target_dim", inherited.get("action_target_dim")),  # None
         state_target_dim=item.get("state_target_dim", inherited.get("state_target_dim")),  # None
         group_id=int(group_id),
     )
@@ -4567,14 +4948,16 @@ def _flatten_source_specs(config: dict[str, Any]) -> list[DatasetSpec] | None:
             #  dataset_groups/xxx-dataset/xxx-task.yaml-root
             "remote_base": source.get("remote_base", address if address is not None else emb_cfg.get("remote_base")),
             "base_path": source.get("base_path", emb_cfg.get("base_path", "")),  # ""
-            "stats_path": source.get("stats_path", emb_cfg.get("stats_path", "dataset_stats.json")),  # "dataset_stats.json"
+            "stats_path": source.get(
+                "stats_path", emb_cfg.get("stats_path", "dataset_stats.json")
+            ),  # "dataset_stats.json"
             "local_text_embedding_cache_dir": source.get(
                 "local_text_embedding_cache_dir",
                 source.get(
                     "text_embedding_cache_dir",
                     emb_cfg.get("local_text_embedding_cache_dir", emb_cfg.get("text_embedding_cache_dir")),
                 ),
-            ), # None
+            ),  # None
             "local_meta_dir_template": source.get("local_meta_dir_template")
             or cache_templates.get("local_meta_dir"),  # openpi/configs/petrel/pi05_xxx.yaml-storage-metadata_cache
             "path_index_dir_template": source.get("path_index_dir_template")
@@ -4589,7 +4972,7 @@ def _flatten_source_specs(config: dict[str, Any]) -> list[DatasetSpec] | None:
                 ),
             ),  # None
             "context_len": source.get("context_len", emb_cfg.get("context_len", 128)),  # 128
-            "modalities": source_modalities,   # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(mapping+mapping_overrides)
+            "modalities": source_modalities,  # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(mapping+mapping_overrides)
             "canonical_adapter": source_canonical_adapter,  # /petrel/(dataset_groups/xxx-dataset/xxx.yaml + control_profiles/xxx.yaml)-(fields+fields)
             "format_version": source.get(
                 "format_version", source.get("format", emb_cfg.get("format_version", emb_cfg.get("format")))
@@ -4617,7 +5000,7 @@ def _flatten_source_specs(config: dict[str, Any]) -> list[DatasetSpec] | None:
                 if value
             ),
             "dataset_weight": source_weight,  # dataset weight
-            "distribute_weights": source_distribute,  
+            "distribute_weights": source_distribute,
             "dataset_weight_overrides": dataset_weight_overrides,  # {}
             "action_target_dim": source.get("action_target_dim", emb_cfg.get("action_target_dim")),  # None
             "state_target_dim": source.get("state_target_dim", emb_cfg.get("state_target_dim")),  # None
@@ -4694,9 +5077,7 @@ def parse_args() -> argparse.Namespace:
         "--eval-fixed-per-dataset", action="store_true", help="Use one fixed eval sample from every expanded dataset."
     )
     parser.add_argument("--eval-exclude-from-training", choices=["none", "sample", "episode"], default=None)
-    parser.add_argument(
-        "--profile", action="store_true", help="Print coarse timing breakdown for local loading."
-    )
+    parser.add_argument("--profile", action="store_true", help="Print coarse timing breakdown for local loading.")
     parser.add_argument("--save-summary", type=Path, default=None)
     return parser.parse_args()
 
@@ -4712,7 +5093,10 @@ def main() -> None:
     if action_size is not None:
         action_size = int(action_size)
     global_sample_stride = int(_resolved_arg(args.global_sample_stride, config, "sampling", "global_sample_stride", 1))
-    parquet_cache_size = int(_resolved_arg(args.parquet_cache_size, config, "storage", "parquet_cache_size", 8))
+    storage_options = parquet_storage_options(config)
+    storage_options["parquet_cache_size"] = int(
+        _resolved_arg(args.parquet_cache_size, config, "storage", "parquet_cache_size", 8)
+    )
 
     t0 = time.perf_counter()
     datasets = [
@@ -4721,7 +5105,7 @@ def main() -> None:
             num_frames=num_frames,
             action_size=action_size,
             global_sample_stride=global_sample_stride,
-            parquet_cache_size=parquet_cache_size,
+            **storage_options,
         )
         for spec in specs
     ]

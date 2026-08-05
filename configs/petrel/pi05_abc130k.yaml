@@ -23,6 +23,8 @@ storage:
   # All dataset-group roots below are relative to this mounted local dataset root.
   local_root: /datahub/public/real/ABC-130K-v3/train
   parquet_cache_size: 8
+  # V3 files contain many episodes; use footer statistics to read only the sampled episode row group.
+  direct_parquet_row_group_read: true
   metadata_cache: data/petrel_cache/meta/{dataset_id}/{remote}
   path_index_cache: data/petrel_cache/path_index/{dataset_id}/{remote}
   frame_filter_cache: data/petrel_cache/filter/{dataset_id}/{remote}

@@ -74,7 +74,6 @@ def action_loss_values(names: Sequence[str], sums_and_counts: torch.Tensor) -> d
     if sums_and_counts.shape != (len(names), 2):
         raise ValueError(f"Expected sums_and_counts shape ({len(names)}, 2), got {tuple(sums_and_counts.shape)}.")
     total_count = float(sums_and_counts[0, 1].item())
-    total_loss_sum = float(sums_and_counts[0, 0].item())
     if total_count <= 0:
         return {}
 
