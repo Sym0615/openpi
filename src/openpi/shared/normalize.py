@@ -17,7 +17,10 @@ class NormStats:
 class RunningStats:
     """Compute running statistics of a batch of vectors."""
 
-    def __init__(self):
+    def __init__(self, feature_shape: tuple[int, ...] | None = None):
+        self._feature_shape = tuple(int(size) for size in feature_shape) if feature_shape is not None else None
+        if self._feature_shape is not None and (not self._feature_shape or any(size <= 0 for size in self._feature_shape)):
+            raise ValueError(f"feature_shape must contain positive dimensions, got {self._feature_shape}.")
         self._count = 0
         self._mean = None
         self._mean_of_squares = None
@@ -34,7 +37,14 @@ class RunningStats:
         Args:
             vectors (np.ndarray): An array where all dimensions except the last are batch dimensions.
         """
-        batch = batch.reshape(-1, batch.shape[-1])
+        if self._feature_shape is None:
+            batch = batch.reshape(-1, batch.shape[-1])
+        else:
+            if batch.ndim < len(self._feature_shape) or tuple(batch.shape[-len(self._feature_shape) :]) != self._feature_shape:
+                raise ValueError(
+                    f"Expected trailing feature shape {self._feature_shape}, got batch shape {batch.shape}."
+                )
+            batch = batch.reshape(-1, int(np.prod(self._feature_shape)))
         num_elements, vector_length = batch.shape
         if self._count == 0:
             self._mean = np.mean(batch, axis=0)
@@ -83,6 +93,13 @@ class RunningStats:
         variance = self._mean_of_squares - self._mean**2
         stddev = np.sqrt(np.maximum(0, variance))
         q01, q99 = self._compute_quantiles([0.01, 0.99])
+        if self._feature_shape is not None:
+            return NormStats(
+                mean=self._mean.reshape(self._feature_shape),
+                std=stddev.reshape(self._feature_shape),
+                q01=q01.reshape(self._feature_shape),
+                q99=q99.reshape(self._feature_shape),
+            )
         return NormStats(mean=self._mean, std=stddev, q01=q01, q99=q99)
 
     def _adjust_histograms(self):

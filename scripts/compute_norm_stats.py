@@ -145,7 +145,10 @@ def main(
         )
 
     keys = ["state", "actions"]
-    stats = {key: normalize.RunningStats() for key in keys}
+    stats = {
+        "state": normalize.RunningStats(),
+        "actions": normalize.RunningStats(feature_shape=(config.model.action_horizon, config.model.action_dim)),
+    }
 
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
         for key in keys:

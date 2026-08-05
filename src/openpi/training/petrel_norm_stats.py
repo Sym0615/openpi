@@ -83,9 +83,87 @@ class _Accumulator:
 
 
 @dataclasses.dataclass
+class _HorizonAccumulator:
+    horizon: int
+    dim: int
+    reservoir_rows: int
+    seed: int
+
+    def __post_init__(self) -> None:
+        if self.horizon <= 0 or self.dim <= 0:
+            raise ValueError(f"horizon and dim must be positive, got horizon={self.horizon}, dim={self.dim}.")
+        self.count = 0
+        self.sum = np.zeros((self.horizon, self.dim), dtype=np.float64)
+        self.sumsq = np.zeros((self.horizon, self.dim), dtype=np.float64)
+        # Keep reservoir_rows as a total vector budget so per-step statistics do
+        # not multiply memory consumption by the action horizon.
+        capacity = max(2, int(self.reservoir_rows) // self.horizon) if self.reservoir_rows > 0 else 0
+        self.reservoir = np.empty((capacity, self.horizon, self.dim), dtype=np.float32)
+        self.reservoir_count = 0
+        self.rows_seen = 0
+        self.rng = np.random.default_rng(self.seed)
+
+    def update(self, value: torch.Tensor | np.ndarray) -> None:
+        array = np.asarray(value, dtype=np.float32)
+        if array.ndim < 2 or tuple(array.shape[-2:]) != (self.horizon, self.dim):
+            raise ValueError(
+                f"Expected action values ending in ({self.horizon}, {self.dim}), got {array.shape}."
+            )
+        array = array.reshape(-1, self.horizon, self.dim)
+        if not bool(np.isfinite(array).all()):
+            raise ValueError("Petrel norm stats encountered non-finite projected action values.")
+        rows = int(array.shape[0])
+        if rows == 0:
+            return
+        array64 = array.astype(np.float64, copy=False)
+        self.count += rows
+        self.sum += array64.sum(axis=0)
+        self.sumsq += np.square(array64).sum(axis=0)
+        self._update_reservoir(array)
+
+    def _update_reservoir(self, rows: np.ndarray) -> None:
+        capacity = int(self.reservoir.shape[0])
+        if capacity <= 0:
+            self.rows_seen += int(rows.shape[0])
+            return
+        for row in rows:
+            self.rows_seen += 1
+            if self.reservoir_count < capacity:
+                self.reservoir[self.reservoir_count] = row
+                self.reservoir_count += 1
+                continue
+            index = int(self.rng.integers(0, self.rows_seen))
+            if index < capacity:
+                self.reservoir[index] = row
+
+    def merge(self, other: _HorizonAccumulator) -> None:
+        if (self.horizon, self.dim) != (other.horizon, other.dim):
+            raise ValueError(
+                "Cannot merge horizon accumulators with different shapes: "
+                f"{(self.horizon, self.dim)} vs {(other.horizon, other.dim)}."
+            )
+        self.count += int(other.count)
+        self.sum += other.sum
+        self.sumsq += other.sumsq
+        self._update_reservoir(other.reservoir[: other.reservoir_count])
+
+    def finalize(self) -> normalize.NormStats:
+        if self.count < 2:
+            raise ValueError(f"Cannot compute Petrel action stats from only {self.count} windows.")
+        mean = self.sum / float(self.count)
+        variance = self.sumsq / float(self.count) - np.square(mean)
+        std = np.sqrt(np.maximum(variance, 0.0))
+        sample = self.reservoir[: self.reservoir_count].astype(np.float64, copy=False)
+        if sample.shape[0] < 2:
+            raise ValueError("Petrel action norm reservoir contains fewer than two windows.")
+        q01, q99 = np.quantile(sample, [0.01, 0.99], axis=0)
+        return normalize.NormStats(mean=mean, std=std, q01=q01, q99=q99)
+
+
+@dataclasses.dataclass
 class _GroupStats:
     state: _Accumulator
-    actions: _Accumulator
+    actions: _HorizonAccumulator
     windows: int = 0
 
 
@@ -101,10 +179,17 @@ def _group_seed(seed: int, stats_group: str, offset: int) -> int:
     return int(seed) + int.from_bytes(digest[:4], "little") + int(offset)
 
 
-def _new_group_stats(dim: int, reservoir_rows: int, seed: int, stats_group: str) -> _GroupStats:
+def _new_group_stats(
+    dim: int, action_horizon: int, reservoir_rows: int, seed: int, stats_group: str
+) -> _GroupStats:
     return _GroupStats(
         state=_Accumulator(dim, reservoir_rows, _group_seed(seed, stats_group, 11)),
-        actions=_Accumulator(dim, reservoir_rows, _group_seed(seed, stats_group, 23)),
+        actions=_HorizonAccumulator(
+            action_horizon,
+            dim,
+            reservoir_rows,
+            _group_seed(seed, stats_group, 23),
+        ),
     )
 
 
@@ -288,7 +373,7 @@ def _valid_start_indices(dataset: Any, unit: dict[str, Any], *, allow_padding: b
     trajectory_pos = int(unit["trajectory_pos"])
     episode_index = int(unit["episode_index"])
     windows = int(unit["windows"])
-    if dataset.subtask_action_segments:
+    if dataset.subtask_action_segments or dataset.spec.frame_filter_enabled:
         episode_len = int(dataset.trajectory_lengths[trajectory_pos])
         intervals = dataset._valid_start_intervals_for_episode(  # noqa: SLF001
             episode_index, episode_len, allow_padding
@@ -336,6 +421,7 @@ def _worker(payload: dict[str, Any]) -> _WorkerStats:
                 stats_group,
                 _new_group_stats(
                     stats_dim,
+                    action_horizon,
                     reservoir_rows,
                     int(payload["seed"]) + worker_id * 1009,
                     stats_group,
@@ -422,7 +508,13 @@ def compute_fast_petrel_norm_stats(
     stats_dim = output_dim
     merged = _WorkerStats(
         groups={
-            group: _new_group_stats(stats_dim, per_group_reservoir, int(seed) + 100_003, group)
+            group: _new_group_stats(
+                stats_dim,
+                int(action_horizon),
+                per_group_reservoir,
+                int(seed) + 100_003,
+                group,
+            )
             for group in expected_groups
         }
     )

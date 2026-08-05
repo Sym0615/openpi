@@ -5,7 +5,7 @@ dataset_id: intern_a1
 openpi:
   state_dim: 32
   action_dim: 32
-  action_horizon: 16
+  action_horizon: 30
   images:
     size:
     - 224
@@ -27,7 +27,7 @@ norm_stats:
   dataset_group_template: dataset/{dataset_id}
 sampling:
   state_frames: 1
-  action_horizon: 16
+  action_horizon: 30
   stride: 1
   allow_end_padding: false
   training_block_size: 16
@@ -71,7 +71,7 @@ source_control_space:
     state: xyz_rpy
     action: delta_xyz_rpy
   action_semantics:
-    joint: delta
+    joint: absolute
     gripper: absolute
     ee: delta
   camera_frame_delta: false

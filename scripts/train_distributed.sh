@@ -3,7 +3,9 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export OPENPI_WORKDIR="${OPENPI_WORKDIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
-export OPENPI_RUN_ROOT="${OPENPI_RUN_ROOT:-/xueyufei/code/openpi-workspace/openpi}"
+export OPENPI_RUN_ROOT="${OPENPI_RUN_ROOT:-${OPENPI_WORKDIR}}"
+export PYTHONPATH="${OPENPI_WORKDIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+export CHECKPINTS_ROOT="${OPENPI_RUN_ROOT}/checkpoints"
 
 # Multi-node SSP jobs inject WORLD_SIZE and rendezvous variables. A single-node
 # GPU job may inject none of them, so default that case to one local node.
@@ -149,7 +151,7 @@ NUM_NODES="${WORLD_SIZE}"
 NODE_RANK="${BOOTSTRAP_NODE_RANK}"
 GPUS_PER_NODE="${OPENPI_GPUS_PER_NODE:-8}"
 LOCAL_BATCH_SIZE="${OPENPI_LOCAL_BATCH_SIZE:-64}"
-export OPENPI_CONFIG_NAME="${CLI_CONFIG_NAME:-${OPENPI_CONFIG_NAME:-pi05_interna1}}"
+export OPENPI_CONFIG_NAME="${CLI_CONFIG_NAME:-${OPENPI_CONFIG_NAME:-pi05_abc130k}}"
 
 cd "${OPENPI_WORKDIR}"
 if [[ -n "${OPENPI_PYTHON:-}" ]]; then
@@ -197,6 +199,9 @@ export TORCH_DISTRIBUTED_DEBUG="${TORCH_DISTRIBUTED_DEBUG:-INFO}"
 export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
 export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
 export NCCL_DEBUG_SUBSYS="${NCCL_DEBUG_SUBSYS:-INIT,ENV,NET}"
+export OPENPI_WANDB=1 
+export WANDB_API_KEY="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"
+export WANDB_MODE=online 
 
 normalize_bool_env() {
   local variable_name="$1"
@@ -263,13 +268,6 @@ else
     echo "CUDA_VISIBLE_DEVICES exposes ${#VISIBLE_DEVICES[@]} device(s), but ${GPUS_PER_NODE} GPU process(es) were requested." >&2
     exit 2
   fi
-fi
-
-if [[ -z "${OPENPI_RUN_ID:-}" ]]; then
-  RUN_ID_SOURCE="interna1_${MASTER_ADDR}_${MASTER_PORT}"
-  export OPENPI_RUN_ID="$(printf '%s' "${RUN_ID_SOURCE}" | tr -cs '[:alnum:]_.-' '_')"
-  echo "OPENPI_RUN_ID was not set; using shared fallback: ${OPENPI_RUN_ID}" >&2
-  echo "Set OPENPI_RUN_ID explicitly to distinguish repeated jobs." >&2
 fi
 
 TORCHRUN_LOG_DIR="${LOG_ROOT}/${OPENPI_RUN_ID}/node_${NODE_RANK}"

@@ -66,10 +66,6 @@ def action_loss_sums_and_counts(
                 component_is_active.sum() * horizon,
             )
 
-    per_dim_sums = values.sum(dim=(0, 1))
-    for dim in range(action_dim):
-        add_metric(f"dim_{dim:02d}", per_dim_sums[dim], batch_size * horizon)
-
     return tuple(names), torch.stack(rows)
 
 
@@ -89,8 +85,8 @@ def action_loss_values(names: Sequence[str], sums_and_counts: torch.Tensor) -> d
         if count <= 0:
             continue
         result[f"mse/{name}"] = loss_sum / count
-        result[f"contribution/{name}"] = loss_sum / total_count
-        if total_loss_sum != 0:
-            result[f"share/{name}"] = loss_sum / total_loss_sum
-        result[f"fraction/{name}"] = count / total_count
+        # result[f"contribution/{name}"] = loss_sum / total_count
+        # if total_loss_sum != 0:
+        #     result[f"share/{name}"] = loss_sum / total_loss_sum
+        # result[f"fraction/{name}"] = count / total_count
     return result

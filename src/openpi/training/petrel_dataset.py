@@ -7,6 +7,8 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 import dataclasses
+import hashlib
+import json
 import logging
 from pathlib import Path
 import time
@@ -123,6 +125,8 @@ class PetrelDataset(torch.utils.data.Dataset):
         self.prefer_sequential_indices = False
         self.training_block_size = 1
         self.requires_worker_restart_each_epoch = True
+        self.frame_filter_summary: dict[str, Any] = {"enabled": False}
+        self.frame_filter_identity: str | None = None
         self._initialize_backend()
 
     def _initialize_backend(self) -> None:
@@ -151,6 +155,7 @@ class PetrelDataset(torch.utils.data.Dataset):
             )
             for spec in specs
         ]
+        self._initialize_frame_filter_identity(datasets)
 
         mixture_cfg = raw_config.get("mixture", {}) if isinstance(raw_config.get("mixture"), dict) else {}
         allow_padding = bool(mixture_cfg.get("allow_padding_at_end", False))
@@ -185,6 +190,87 @@ class PetrelDataset(torch.utils.data.Dataset):
         self.prefer_sequential_indices = bool(getattr(mixed_dataset, "prefer_sequential_indices", False))
         self.training_block_size = int(getattr(mixed_dataset, "training_block_size", 1))
         self._validate_feature_dimensions()
+
+    def _initialize_frame_filter_identity(self, datasets: list[Any]) -> None:
+        enabled = [
+            dataset
+            for dataset in datasets
+            if bool(getattr(getattr(dataset, "spec", None), "frame_filter_enabled", False))
+        ]
+        if not enabled:
+            self.frame_filter_summary = {"enabled": False, "leaves": 0}
+            logging.info("frame_filter enabled=false")
+            return
+
+        leaves: list[dict[str, Any]] = []
+        totals = {
+            "episodes": 0,
+            "kept_episodes": 0,
+            "filtered_episodes": 0,
+            "source_frames": 0,
+            "kept_frames": 0,
+            "valid_windows": 0,
+        }
+        for dataset in enabled:
+            if dataset.frame_filter_path is None:
+                raise RuntimeError(f"Frame filter is enabled but not loaded for dataset {dataset.name}")
+            manifest = dataset.frame_filter_manifest or {}
+            stats = manifest.get("stats") if isinstance(manifest.get("stats"), dict) else {}
+            actual_stats = {
+                "episodes": len(dataset.frame_filter_clean_segments),
+                "kept_episodes": sum(bool(segments) for segments in dataset.frame_filter_clean_segments.values()),
+                "filtered_episodes": sum(
+                    not segments for segments in dataset.frame_filter_clean_segments.values()
+                ),
+                "source_frames": sum(int(episode["length"]) for episode in dataset.episodes_dict.values()),
+                "kept_frames": sum(
+                    end - start
+                    for segments in dataset.frame_filter_clean_segments.values()
+                    for start, end in segments
+                ),
+                "valid_windows": int(dataset.valid_start_counts(allow_padding_at_end=False).sum()),
+            }
+            if dataset.spec.frame_filter_strict_episode_coverage:
+                mismatches = {
+                    key: (int(stats.get(key, -1)), actual)
+                    for key, actual in actual_stats.items()
+                    if int(stats.get(key, -1)) != actual
+                }
+                if mismatches:
+                    raise ValueError(f"Frame filter manifest stats mismatch for {dataset.name}: {mismatches}")
+            for key, value in actual_stats.items():
+                totals[key] += int(value)
+            leaves.append(
+                {
+                    "name": dataset.name,
+                    "identity": dataset.frame_filter_identity,
+                    "episodes": len(dataset.frame_filter_clean_segments),
+                }
+            )
+        identity = hashlib.sha256(
+            json.dumps(leaves, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        summary: dict[str, Any] = {
+            "enabled": True,
+            "required": all(dataset.spec.frame_filter_required for dataset in enabled),
+            "strict_episode_coverage": all(
+                dataset.spec.frame_filter_strict_episode_coverage for dataset in enabled
+            ),
+            "window_policy": sorted({dataset.spec.frame_filter_window_policy for dataset in enabled}),
+            "leaves": len(enabled),
+            "identity_sha256": identity,
+            **totals,
+        }
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            gathered: list[str | None] = [None] * torch.distributed.get_world_size()
+            torch.distributed.all_gather_object(gathered, identity)
+            if any(value != identity for value in gathered):
+                raise RuntimeError(f"Frame filter identity differs across DDP ranks: {gathered}")
+
+        self.frame_filter_identity = identity
+        self.frame_filter_summary = summary
+        logging.info("frame_filter %s", json.dumps(summary, ensure_ascii=False, sort_keys=True))
 
     def _validate_openpi_contract(self, raw_config: Mapping[str, Any]) -> None:
         contract = raw_config.get("openpi")

@@ -1,7 +1,6 @@
 schema: openpi_petrel_control_profile_registry_v1
-profile_defaults:
-  # Dataset-group task stats override this robot-level group; dataset-level stats remain the final fallback.
-  stats_group_template: profile/{dataset_id}/{robot_id}
+# profile_defaults:
+#   stats_group_template: profile/{dataset_id}/{robot_id}
 control_profiles:
   a1_single_ee:
     control_type: single_arm
@@ -22,13 +21,13 @@ control_profiles:
             - 0
             - 7
             target_slot: right.joint
-          ee:
-            state_key: states.tcp_to_robot_pose
-            action_key: actions.tcp_to_robot_pose
-            raw_slice:
-            - 0
-            - 7
-            target_slot: right.ee
+          # ee:
+          #   state_key: states.tcp_to_robot_pose
+          #   action_key: actions.tcp_to_robot_pose
+          #   raw_slice:
+          #   - 0
+          #   - 7
+          #   target_slot: right.ee
           gripper:
             state_key: states.gripper.position
             action_key: actions.gripper.openness
@@ -40,12 +39,12 @@ control_profiles:
       state:
         keys:
         - states.joint.position
-        - states.tcp_to_robot_pose
+        # - states.tcp_to_robot_pose
         - states.gripper.position
       action:
         keys:
         - actions.joint.position
-        - actions.tcp_to_robot_pose
+        # - actions.tcp_to_robot_pose
         - actions.gripper.openness
       video:
         key: auto
@@ -78,13 +77,13 @@ control_profiles:
             - 0
             - 6
             target_slot: left.joint
-          ee:
-            state_key: states.left_tcp_to_robot_pose
-            action_key: actions.left_tcp_to_robot_pose
-            raw_slice:
-            - 0
-            - 7
-            target_slot: left.ee
+          # ee:
+          #   state_key: states.left_tcp_to_robot_pose
+          #   action_key: actions.left_tcp_to_robot_pose
+          #   raw_slice:
+          #   - 0
+          #   - 7
+          #   target_slot: left.ee
           gripper:
             state_key: states.left_gripper.position
             action_key: actions.left_gripper.position
@@ -100,13 +99,13 @@ control_profiles:
             - 0
             - 6
             target_slot: right.joint
-          ee:
-            state_key: states.right_tcp_to_robot_pose
-            action_key: actions.right_tcp_to_robot_pose
-            raw_slice:
-            - 0
-            - 7
-            target_slot: right.ee
+          # ee:
+          #   state_key: states.right_tcp_to_robot_pose
+          #   action_key: actions.right_tcp_to_robot_pose
+          #   raw_slice:
+          #   - 0
+          #   - 7
+          #   target_slot: right.ee
           gripper:
             state_key: states.right_gripper.position
             action_key: actions.right_gripper.position
@@ -118,18 +117,18 @@ control_profiles:
       state:
         keys:
         - states.left_joint.position
-        - states.left_tcp_to_robot_pose
+        # - states.left_tcp_to_robot_pose
         - states.left_gripper.position
         - states.right_joint.position
-        - states.right_tcp_to_robot_pose
+        # - states.right_tcp_to_robot_pose
         - states.right_gripper.position
       action:
         keys:
         - actions.left_joint.position
-        - actions.left_tcp_to_robot_pose
+        # - actions.left_tcp_to_robot_pose
         - actions.left_gripper.position
         - actions.right_joint.position
-        - actions.right_tcp_to_robot_pose
+        # - actions.right_tcp_to_robot_pose
         - actions.right_gripper.position
       video:
         key: auto
@@ -163,13 +162,13 @@ control_profiles:
             - 0
             - 7
             target_slot: left.joint
-          ee:
-            state_key: states.left_tcp_to_robot_pose
-            action_key: actions.left_tcp_to_robot_pose
-            raw_slice:
-            - 0
-            - 7
-            target_slot: left.ee
+          # ee:
+          #   state_key: states.left_tcp_to_robot_pose
+          #   action_key: actions.left_tcp_to_robot_pose
+          #   raw_slice:
+          #   - 0
+          #   - 7
+          #   target_slot: left.ee
           gripper:
             state_key: states.left_gripper.position
             action_key: actions.left_gripper.position
@@ -185,13 +184,13 @@ control_profiles:
             - 0
             - 7
             target_slot: right.joint
-          ee:
-            state_key: states.right_tcp_to_robot_pose
-            action_key: actions.right_tcp_to_robot_pose
-            raw_slice:
-            - 0
-            - 7
-            target_slot: right.ee
+          # ee:
+          #   state_key: states.right_tcp_to_robot_pose
+          #   action_key: actions.right_tcp_to_robot_pose
+          #   raw_slice:
+          #   - 0
+          #   - 7
+          #   target_slot: right.ee
           gripper:
             state_key: states.right_gripper.position
             action_key: actions.right_gripper.position
@@ -203,18 +202,18 @@ control_profiles:
       state:
         keys:
         - states.left_joint.position
-        - states.left_tcp_to_robot_pose
+        # - states.left_tcp_to_robot_pose
         - states.left_gripper.position
         - states.right_joint.position
-        - states.right_tcp_to_robot_pose
+        # - states.right_tcp_to_robot_pose
         - states.right_gripper.position
       action:
         keys:
         - actions.left_joint.position
-        - actions.left_tcp_to_robot_pose
+        # - actions.left_tcp_to_robot_pose
         - actions.left_gripper.position
         - actions.right_joint.position
-        - actions.right_tcp_to_robot_pose
+        # - actions.right_tcp_to_robot_pose
         - actions.right_gripper.position
       video:
         key: auto

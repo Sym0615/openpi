@@ -986,7 +986,7 @@ _CONFIGS = [
         # Minimal closed-loop config: only the InternData-A1 category. All robot
         # variants inside InternData-A1 share one global 32D normalization asset.
         name="pi05_interna1",
-        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=30),
         data=PetrelDataConfig(
             repo_id="intern_a1",
             dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_interna1.yaml"),
@@ -1000,7 +1000,7 @@ _CONFIGS = [
         # ABC-130K-v3 local RGB datasets. Three-camera schemas map directly to
         # Pi0 slots; four-camera schemas select top-left and both wrist views.
         name="pi05_abc130k",
-        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=30),
         data=PetrelDataConfig(
             repo_id="abc130k",
             dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_abc130k.yaml"),

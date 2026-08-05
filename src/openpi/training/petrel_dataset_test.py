@@ -11,6 +11,7 @@ import yaml
 from openpi import transforms
 from openpi.shared import normalize
 from openpi.training import petrel_dataset
+from openpi.training import petrel_norm_stats
 
 
 class _FakePetrelDataset:
@@ -237,6 +238,35 @@ def test_fast_petrel_accumulator_matches_exact_small_statistics():
     np.testing.assert_allclose(stats.std, np.sqrt(np.asarray([5.0, 5.0])))
     np.testing.assert_allclose(stats.q01, np.asarray([0.06, 2.06]))
     np.testing.assert_allclose(stats.q99, np.asarray([5.94, 7.94]))
+
+
+def test_fast_petrel_action_accumulator_preserves_horizon_statistics():
+    from openpi.training import petrel_norm_stats
+
+    accumulator = petrel_norm_stats._HorizonAccumulator(  # noqa: SLF001
+        horizon=2, dim=2, reservoir_rows=64, seed=7
+    )
+    actions = np.asarray(
+        [
+            [[0.0, 10.0], [100.0, 1000.0]],
+            [[2.0, 14.0], [300.0, 1400.0]],
+            [[4.0, 18.0], [500.0, 1800.0]],
+        ],
+        dtype=np.float32,
+    )
+    accumulator.update(actions[:2])
+    accumulator.update(actions[2:])
+
+    stats = accumulator.finalize()
+
+    assert stats.mean.shape == (2, 2)
+    assert stats.std.shape == (2, 2)
+    assert stats.q01.shape == (2, 2)
+    assert stats.q99.shape == (2, 2)
+    np.testing.assert_allclose(stats.mean, actions.mean(axis=0))
+    np.testing.assert_allclose(stats.std, actions.std(axis=0), rtol=1e-6)
+    np.testing.assert_allclose(stats.q01, np.quantile(actions, 0.01, axis=0))
+    np.testing.assert_allclose(stats.q99, np.quantile(actions, 0.99, axis=0))
 
 
 def test_fast_petrel_episode_blocks_preserve_global_cap():
@@ -775,6 +805,12 @@ def test_pi05_abc130k_config_and_manifest():
     assert {spec.stats_group_fallbacks for spec in specs} == {()}
     assert all("data/petrel_cache/meta/abc130k/" in str(spec.local_meta_dir) for spec in specs)
     assert all("data/petrel_cache/path_index/abc130k/" in str(spec.path_index_dir) for spec in specs)
+    assert all("data/petrel_cache/filter/abc130k/" in str(spec.frame_filter_dir) for spec in specs)
+    assert all(spec.frame_filter_enabled for spec in specs)
+    assert all(spec.frame_filter_required for spec in specs)
+    assert all(spec.frame_filter_strict_episode_coverage for spec in specs)
+    assert {spec.frame_filter_filename for spec in specs} == {"frame_filter.jsonl"}
+    assert {spec.frame_filter_window_policy for spec in specs} == {"full_chunk"}
     adapter = translated["embodiments"]["abc130k_3cam"]["canonical_adapter"]
     assert adapter["slots"]["left"]["joint"]["state_target_indices"] == [0, 1, 2, 3, 4, 5]
     assert adapter["slots"]["right"]["joint"]["state_target_indices"] == [7, 8, 9, 10, 11, 12]
@@ -810,6 +846,36 @@ def test_pi05_abc130k_config_and_manifest():
         "observation.images.left_wrist_camera": "left_wrist_0_rgb",
         "observation.images.right_wrist_camera": "right_wrist_0_rgb",
     }
+
+
+def test_frame_filter_limits_windows_without_subtask_segments():
+    reader = petrel_dataset.reader
+    dataset = reader.PetrelLeRobotDataset.__new__(reader.PetrelLeRobotDataset)
+    dataset.spec = SimpleNamespace(frame_filter_enabled=True, frame_filter_window_policy="full_chunk")
+    dataset.episodes_dict = {0: {"length": 100, "start_frame": 0}}
+    dataset.subtask_action_segments = {}
+    dataset.frame_filter_clean_segments = {0: ((10, 50), (60, 100))}
+    dataset.max_delta_index = 29
+    dataset.trajectory_ids = np.asarray([0], dtype=np.int64)
+    dataset.trajectory_lengths = np.asarray([100], dtype=np.int64)
+
+    assert dataset._valid_start_intervals_for_episode(0, 100) == ((10, 20), (60, 70))  # noqa: SLF001
+    assert dataset.valid_start_counts().tolist() == [22]
+    assert dataset.is_valid_start_for_trajectory_pos(0, 10)
+    assert dataset.is_valid_start_for_trajectory_pos(0, 20)
+    assert not dataset.is_valid_start_for_trajectory_pos(0, 21)
+    assert not dataset.is_valid_start_for_trajectory_pos(0, 55)
+    assert dataset.is_valid_start_for_trajectory_pos(0, 60)
+    norm_starts = petrel_norm_stats._valid_start_indices(  # noqa: SLF001
+        dataset,
+        {"trajectory_pos": 0, "episode_index": 0, "windows": 22, "blocks": None},
+        allow_padding=False,
+    )
+    assert norm_starts.tolist() == list(range(10, 21)) + list(range(60, 71))
+
+    dataset.frame_filter_clean_segments = {0: ()}
+    assert dataset._valid_start_intervals_for_episode(0, 100) == ()  # noqa: SLF001
+    assert dataset.valid_start_counts().tolist() == [0]
 
 
 def test_abc130k_camera_mapping_uses_profile_selected_stereo_top_view():
@@ -891,7 +957,7 @@ def test_norm_stats_merge_multiple_dataset_batches_into_standard_global_format()
     from openpi.shared import normalize
 
     state_stats = normalize.RunningStats()
-    action_stats = normalize.RunningStats()
+    action_stats = normalize.RunningStats(feature_shape=(2, 2))
     # These two updates represent two different datasets selected by the mixture.
     state_stats.update(np.asarray([[0.0, 2.0], [2.0, 4.0]]))
     state_stats.update(np.asarray([[4.0, 6.0], [6.0, 8.0]]))
@@ -905,9 +971,9 @@ def test_norm_stats_merge_multiple_dataset_batches_into_standard_global_format()
 
     assert set(restored) == {"state", "actions"}
     np.testing.assert_allclose(restored["state"].mean, np.asarray([3.0, 5.0]))
-    np.testing.assert_allclose(restored["actions"].mean, np.asarray([3.0, 4.0]))
+    np.testing.assert_allclose(restored["actions"].mean, np.asarray([[2.0, 3.0], [4.0, 5.0]]))
     assert restored["state"].q01.shape == (2,)
-    assert restored["actions"].q99.shape == (2,)
+    assert restored["actions"].q99.shape == (2, 2)
 
 
 def test_pytorch_torch_dataloader_does_not_initialize_jax_backend(monkeypatch):

@@ -5,7 +5,7 @@ dataset_id: abc130k
 openpi:
   state_dim: 32
   action_dim: 32
-  action_horizon: 16
+  action_horizon: 30
   images:
     size:
     - 224
@@ -25,14 +25,21 @@ storage:
   parquet_cache_size: 8
   metadata_cache: data/petrel_cache/meta/{dataset_id}/{remote}
   path_index_cache: data/petrel_cache/path_index/{dataset_id}/{remote}
+  frame_filter_cache: data/petrel_cache/filter/{dataset_id}/{remote}
+frame_filter:
+  enabled: true
+  required: true
+  strict_episode_coverage: true
+  filename: frame_filter.jsonl
+  window_policy: full_chunk
 norm_stats:
   dataset_group_template: dataset/{dataset_id}
 sampling:
   state_frames: 1
-  action_horizon: 16
+  action_horizon: 30
   stride: 1
   allow_end_padding: false
-  training_block_size: 16
+  training_block_size: 1
   training_frame_stride: 1
 mixture:
   seed: 42
@@ -53,8 +60,6 @@ source_control_space:
   slots:
     left:
       joint:
-        # Preserve the six pretrained ALOHA joint dimensions and reserve dim 26
-        # for datasets which provide a seventh left-arm joint.
         indices: [0, 1, 2, 3, 4, 5, 26]
       gripper:
         indices: [6]

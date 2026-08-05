@@ -52,7 +52,6 @@ _PROFILE_ENABLED = False
 _PROFILE_EVENTS: list[tuple[str, float, dict[str, Any]]] = []
 OPENPI_REPO_ROOT = Path(__file__).resolve().parents[3]
 CACHE_ROOT_PATHS = (str(OPENPI_REPO_ROOT / "data/petrel_cache"),)
-FRAME_FILTER_FILENAMES = ("frame_filter.jsonl", "frame_filter_sidecar.jsonl")
 
 
 def _is_file_accessible(path: Path) -> bool:
@@ -943,6 +942,12 @@ class DatasetSpec:
     local_stats_path: str | None = None
     local_meta_dir: str | None = None
     path_index_dir: str | None = None
+    frame_filter_dir: str | None = None
+    frame_filter_enabled: bool = False
+    frame_filter_required: bool = False
+    frame_filter_strict_episode_coverage: bool = False
+    frame_filter_filename: str = "frame_filter.jsonl"
+    frame_filter_window_policy: str = "full_chunk"
     local_text_embedding_cache_dir: str | None = None
     context_len: int = 128
     text_encoder_id: str = None
@@ -1019,6 +1024,8 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         self._loaded_path_index_dir: Path | None = None
         self.frame_filter_clean_segments: dict[int, tuple[tuple[int, int], ...]] = {}
         self.frame_filter_path: Path | None = None
+        self.frame_filter_manifest: dict[str, Any] | None = None
+        self.frame_filter_identity: str | None = None
 
         t0 = time.perf_counter()
         # Dict data/petrel_cache/meta/InternData-A1_v30/articulation_tasks/lift2/close_the_microwave_left_arm_part1/info.json
@@ -1045,8 +1052,8 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         self.state_dim = _feature_dims(self.info, self.state_keys)  # info state shape count
         self.action_dim = _feature_dims(self.info, self.action_keys)  # info action shape count
         if self.use_canonical_adapter:
-            self.state_target_dim = int(self.canonical_dim)  # 80
-            self.action_target_dim = int(self.canonical_dim)  # 80
+            self.state_target_dim = int(self.canonical_dim)
+            self.action_target_dim = int(self.canonical_dim)
         else:
             self.state_target_dim = int(spec.state_target_dim) if spec.state_target_dim is not None else self.state_dim
             self.action_target_dim = (
@@ -1133,21 +1140,10 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         return None
 
     def _frame_filter_paths(self) -> list[Path]:
-        roots: list[Path] = []
-        if self._loaded_path_index_dir is not None:
-            roots.append(self._loaded_path_index_dir)
-        roots.extend(path.parent for path in self._path_index_paths())
-        out: list[Path] = []
-        seen: set[str] = set()
-        for root in roots:
-            for name in FRAME_FILTER_FILENAMES:
-                path = root / name
-                key = str(path)
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(path)
-        return out
+        if not self.spec.frame_filter_enabled or not self.spec.frame_filter_dir:
+            return []
+        filename = self.spec.frame_filter_filename or "frame_filter.jsonl"
+        return [root / filename for root in _local_path_candidates(self.spec.frame_filter_dir)]
 
     @staticmethod
     def _normalize_clean_segments(raw_segments: Any, episode_len: int) -> tuple[tuple[int, int], ...]:
@@ -1180,30 +1176,104 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
     def _load_local_frame_filter(self) -> None:
         self.frame_filter_clean_segments = {}
         self.frame_filter_path = None
+        self.frame_filter_manifest = None
+        self.frame_filter_identity = None
+        if not self.spec.frame_filter_enabled:
+            return
+        if self.spec.frame_filter_window_policy != "full_chunk":
+            raise ValueError(
+                f"Dataset {self.name} only supports frame_filter.window_policy=full_chunk, "
+                f"got {self.spec.frame_filter_window_policy!r}."
+            )
+        failures: list[str] = []
         for filter_path in self._frame_filter_paths():
             if not _is_file_accessible(filter_path):
                 continue
             loaded: dict[int, tuple[tuple[int, int], ...]] = {}
             try:
                 with filter_path.open("r", encoding="utf-8") as handle:
-                    for line in handle:
+                    for line_number, line in enumerate(handle, start=1):
                         line = line.strip()
                         if not line:
                             continue
                         row = json.loads(line)
                         if not isinstance(row, dict) or "episode_index" not in row:
-                            continue
+                            raise ValueError(f"Invalid frame filter row at {filter_path}:{line_number}")
                         episode_index = int(row["episode_index"])
+                        if episode_index in loaded:
+                            raise ValueError(f"Duplicate episode_index={episode_index} in {filter_path}")
                         episode = self.episodes_dict.get(episode_index)
                         if episode is None:
-                            continue
+                            raise ValueError(f"Unknown episode_index={episode_index} in {filter_path}")
                         episode_len = int(episode["length"])
-                        segments = self._normalize_clean_segments(row.get("clean_segments"), episode_len)
+                        raw_segments = row.get("clean_segments")
+                        segments = self._normalize_clean_segments(raw_segments, episode_len)
+                        status = str(row.get("status", ""))
+                        if status not in {"kept", "filtered"}:
+                            raise ValueError(
+                                f"Unsupported status={status!r} for episode_index={episode_index} in {filter_path}"
+                            )
+                        if status == "filtered" and segments:
+                            raise ValueError(f"Filtered episode_index={episode_index} has non-empty clean_segments")
+                        if status == "kept" and not segments:
+                            raise ValueError(f"Kept episode_index={episode_index} has empty clean_segments")
+                        if self.spec.frame_filter_strict_episode_coverage:
+                            canonical = [[int(start), int(end)] for start, end in segments]
+                            if canonical != raw_segments:
+                                raise ValueError(
+                                    f"Invalid, unsorted, overlapping, or out-of-range clean_segments for "
+                                    f"episode_index={episode_index}: raw={raw_segments!r}, normalized={canonical!r}"
+                                )
                         loaded[episode_index] = segments
-            except Exception:
+            except Exception as exc:
+                failures.append(f"{filter_path}: {type(exc).__name__}: {exc}")
                 continue
+            if self.spec.frame_filter_strict_episode_coverage:
+                expected = set(self.episodes_dict)
+                actual = set(loaded)
+                if expected != actual:
+                    missing = sorted(expected - actual)[:10]
+                    extra = sorted(actual - expected)[:10]
+                    failures.append(
+                        f"{filter_path}: episode coverage mismatch expected={len(expected)} actual={len(actual)} "
+                        f"missing={missing} extra={extra}"
+                    )
+                    continue
             self.frame_filter_clean_segments = loaded
             self.frame_filter_path = filter_path
+            sidecar_sha256 = hashlib.sha256(filter_path.read_bytes()).hexdigest()
+            manifest_path = filter_path.parent / "frame_filter_manifest.json"
+            if _is_file_accessible(manifest_path):
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if not isinstance(manifest, dict):
+                    raise TypeError(f"Frame filter manifest must be a JSON object: {manifest_path}")
+                self.frame_filter_manifest = manifest
+                manifest_sampling = manifest.get("sampling")
+                if isinstance(manifest_sampling, dict):
+                    manifest_horizon = int(manifest_sampling.get("action_horizon", self.action_size))
+                    manifest_stride = int(manifest_sampling.get("stride", self.global_sample_stride))
+                    if (manifest_horizon, manifest_stride) != (self.action_size, self.global_sample_stride):
+                        raise ValueError(
+                            f"Frame filter sampling mismatch for {filter_path}: "
+                            f"manifest horizon/stride={manifest_horizon}/{manifest_stride}, "
+                            f"reader={self.action_size}/{self.global_sample_stride}"
+                        )
+                expected_sha256 = manifest.get("sidecar_sha256")
+                if expected_sha256 and str(expected_sha256) != sidecar_sha256:
+                    raise ValueError(
+                        f"Frame filter SHA-256 mismatch for {filter_path}: "
+                        f"manifest={expected_sha256}, actual={sidecar_sha256}"
+                    )
+                self.frame_filter_identity = str(
+                    expected_sha256
+                    or manifest.get("collection_identity_sha256")
+                    or manifest.get("source", {}).get("identity_hash")
+                    or sidecar_sha256
+                ) or None
+            elif self.spec.frame_filter_required:
+                raise FileNotFoundError(f"Required frame filter manifest is missing: {manifest_path}")
+            else:
+                self.frame_filter_identity = sidecar_sha256
             _profile_record(
                 "dataset.frame_filter_hit",
                 0.0,
@@ -1212,6 +1282,13 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
                 episodes=len(loaded),
             )
             return
+        if failures:
+            raise ValueError(f"Frame filter validation failed for dataset {self.name}: {'; '.join(failures)}")
+        if self.spec.frame_filter_required:
+            raise FileNotFoundError(
+                f"Required frame filter could not be loaded for dataset {self.name}: "
+                f"searched={self._frame_filter_paths()}"
+            )
 
     def _write_local_path_index(self, rows: list[dict[str, Any]]) -> None:
         for cache_path in self._path_index_paths():
@@ -1382,21 +1459,30 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
             return tuple()
 
         segments = self._subtask_segments_for_episode(int(episode_index))
-        if not segments:
-            max_start = episode_len - 1 if allow_padding_at_end else episode_len - 1 - int(self.max_delta_index)
-            max_start -= max(0, int(extra_span))
-            return ((0, int(max_start)),) if max_start >= 0 else tuple()
-
         source_start = self.episode_start_frame(int(episode_index))
-        required_delta = int(self.max_delta_index) + max(0, int(extra_span))
-        clean_segments = self.clean_segments_for_episode(int(episode_index), episode_len)  # TODO
+        if segments:
+            candidate_segments = tuple(
+                (
+                    max(0, int(seg_start) - source_start),
+                    min(episode_len, int(seg_end) - source_start),
+                )
+                for seg_start, seg_end, _ in segments
+            )
+        else:
+            candidate_segments = ((0, episode_len),)
+
+        # full_chunk means every state/action sample must remain inside one clean
+        # segment. End padding remains available only when no frame filter is active.
+        filtered_full_chunk = self.spec.frame_filter_enabled and self.spec.frame_filter_window_policy == "full_chunk"
+        required_delta = (
+            int(self.max_delta_index) if filtered_full_chunk or not allow_padding_at_end else 0
+        ) + max(0, int(extra_span))
+        clean_segments = self.clean_segments_for_episode(int(episode_index), episode_len)
         intervals: list[tuple[int, int]] = []
-        for seg_start, seg_end, _ in segments:
-            subtask_start = max(0, int(seg_start) - source_start)
-            subtask_end = min(episode_len, int(seg_end) - source_start)
+        for candidate_start, candidate_end in candidate_segments:
             for clean_start, clean_end in clean_segments:
-                local_start = max(subtask_start, int(clean_start))
-                local_end = min(subtask_end, int(clean_end))
+                local_start = max(int(candidate_start), int(clean_start))
+                local_end = min(int(candidate_end), int(clean_end))
                 max_start = local_end - 1 - required_delta
                 if max_start >= local_start:
                     intervals.append((local_start, max_start))
@@ -2529,7 +2615,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         return int(sum(self.episode_lengths))
 
     def valid_start_counts(self, allow_padding_at_end: bool = False) -> np.ndarray:
-        if self.subtask_action_segments:
+        if self.subtask_action_segments or self.spec.frame_filter_enabled:
             counts = []
             for trajectory_pos, episode_index in enumerate(self.trajectory_ids):
                 episode_len = int(self.trajectory_lengths[int(trajectory_pos)])
@@ -2545,7 +2631,7 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         return np.maximum(self.trajectory_lengths - int(self.max_delta_index), 0).astype(np.int64)
 
     def max_start_for_trajectory_pos(self, trajectory_pos: int, allow_padding_at_end: bool = False) -> int:
-        if self.subtask_action_segments:
+        if self.subtask_action_segments or self.spec.frame_filter_enabled:
             episode_index = int(self.trajectory_ids[int(trajectory_pos)])
             episode_len = int(self.trajectory_lengths[int(trajectory_pos)])
             intervals = self._valid_start_intervals_for_episode(
@@ -2558,6 +2644,22 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         if allow_padding_at_end:
             return length - 1
         return length - 1 - int(self.max_delta_index)
+
+    def valid_start_intervals_for_trajectory_pos(
+        self, trajectory_pos: int, allow_padding_at_end: bool = False
+    ) -> tuple[tuple[int, int], ...]:
+        episode_index = int(self.trajectory_ids[int(trajectory_pos)])
+        episode_len = int(self.trajectory_lengths[int(trajectory_pos)])
+        return self._valid_start_intervals_for_episode(episode_index, episode_len, allow_padding_at_end)
+
+    def is_valid_start_for_trajectory_pos(
+        self, trajectory_pos: int, frame_index: int, allow_padding_at_end: bool = False
+    ) -> bool:
+        frame_index = int(frame_index)
+        return any(
+            start <= frame_index <= end
+            for start, end in self.valid_start_intervals_for_trajectory_pos(trajectory_pos, allow_padding_at_end)
+        )
 
     def get_episode_data(self, selected_episode_pos: int) -> dict[str, torch.Tensor | list[Any]]:
         episode_index = self.selected_episodes[selected_episode_pos]
@@ -3025,10 +3127,10 @@ class MixedPetrelLeRobotDataset(torch.utils.data.Dataset):
             traj_pos = int(traj_matches[0])
             max_start = ds.max_start_for_trajectory_pos(traj_pos, self.allow_padding_at_end)
             frame_idx = int(sample.get("frame_index", sample.get("start_frame", 0)))
-            if frame_idx < 0 or frame_idx > max_start:
+            if not ds.is_valid_start_for_trajectory_pos(traj_pos, frame_idx, self.allow_padding_at_end):
                 raise IndexError(
                     f"fixed eval frame_index={frame_idx} invalid for dataset={ds.name} "
-                    f"episode={episode_index}; valid range is 0..{max_start}"
+                    f"episode={episode_index}; max valid start is {max_start}"
                 )
             steps.append((ds_pos, episode_index, frame_idx))
         return steps
@@ -3052,10 +3154,10 @@ class MixedPetrelLeRobotDataset(torch.utils.data.Dataset):
             episode_index = int(ds.trajectory_ids[traj_pos])
             max_start = ds.max_start_for_trajectory_pos(traj_pos, self.allow_padding_at_end)
             frame_idx = int(frame_index)
-            if frame_idx < 0 or frame_idx > max_start:
+            if not ds.is_valid_start_for_trajectory_pos(traj_pos, frame_idx, self.allow_padding_at_end):
                 raise IndexError(
                     f"fixed eval frame_index={frame_idx} invalid for dataset={ds.name} "
-                    f"episode={episode_index}; valid range is 0..{max_start}"
+                    f"episode={episode_index}; max valid start is {max_start}"
                 )
             steps.append((ds_pos, episode_index, frame_idx))
         return steps
@@ -3200,10 +3302,14 @@ class MixedPetrelLeRobotDataset(torch.utils.data.Dataset):
                 valid_positions = valid_positions[: int(episodes_per_dataset)]
             for traj_pos in valid_positions:
                 episode_index = int(ds.trajectory_ids[traj_pos])
-                max_start = ds.max_start_for_trajectory_pos(traj_pos, self.allow_padding_at_end)
+                intervals = ds.valid_start_intervals_for_trajectory_pos(traj_pos, self.allow_padding_at_end)
+                valid_starts = [start for begin, end in intervals for start in range(begin, end + 1)]
                 rng = np.random.default_rng(safe_hash(("eval_dataset", self.seed, int(ds_pos), int(episode_index))))
-                for frame_idx in self._eval_frame_indices(max_start, frames_per_episode, frame_policy, rng):
-                    steps.append((ds_pos, episode_index, int(frame_idx)))
+                selected_positions = self._eval_frame_indices(
+                    len(valid_starts) - 1, frames_per_episode, frame_policy, rng
+                )
+                for position in selected_positions:
+                    steps.append((ds_pos, episode_index, int(valid_starts[position])))
         return steps
 
     def __len__(self) -> int:
@@ -3616,6 +3722,7 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
     sampling = payload.get("sampling")
     mixture = payload.get("mixture")
     norm_grouping = payload.get("norm_stats", {})
+    frame_filter = payload.get("frame_filter", {})
     dataset_files = payload.get("dataset_files")
     control_space = _validate_source_control_space(payload.get("source_control_space"), contract)
     for name, value in (
@@ -3627,6 +3734,21 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
             raise TypeError(f"Petrel YAML {name} must be a mapping.")
     if not isinstance(norm_grouping, dict):
         raise TypeError("Petrel YAML norm_stats must be a mapping when provided.")
+    if not isinstance(frame_filter, dict):
+        raise TypeError("Petrel YAML frame_filter must be a mapping when provided.")
+    frame_filter_config = {
+        "enabled": bool(frame_filter.get("enabled", False)),
+        "required": bool(frame_filter.get("required", False)),
+        "strict_episode_coverage": bool(frame_filter.get("strict_episode_coverage", False)),
+        "filename": str(frame_filter.get("filename", "frame_filter.jsonl")),
+        "window_policy": str(frame_filter.get("window_policy", "full_chunk")),
+    }
+    if frame_filter_config["required"] and not frame_filter_config["enabled"]:
+        raise ValueError("frame_filter.required=true requires frame_filter.enabled=true.")
+    if not frame_filter_config["filename"] or Path(frame_filter_config["filename"]).name != frame_filter_config["filename"]:
+        raise ValueError("frame_filter.filename must be a plain file name.")
+    if frame_filter_config["window_policy"] != "full_chunk":
+        raise ValueError("Only frame_filter.window_policy=full_chunk is currently supported.")
     if "control_profiles" in payload:
         raise ValueError(
             "Global inline control_profiles are not supported; use control_profile_files to register shared "
@@ -3849,9 +3971,13 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
             }
         )
 
-    cache_templates = { 
+    cache_templates = {
         "local_meta_dir": storage.get("metadata_cache"),
         "path_index_dir": storage.get("path_index_cache"),
+        "frame_filter_dir": storage.get(
+            "frame_filter_cache",
+            f"data/petrel_cache/filter/{dataset_id}/{{remote}}" if frame_filter_config["enabled"] else None,
+        ),
     }
     for key, value in tuple(cache_templates.items()):
         if not isinstance(value, str) or not value:
@@ -3884,12 +4010,14 @@ def _translate_openpi_petrel_config(payload: dict[str, Any], config_dir: Path) -
             "training_frame_stride": int(sampling.get("training_frame_stride", 1)),
         },
         "cache_templates": cache_templates,
+        "frame_filter": frame_filter_config,
         "dataset_defaults": {
             "dataset_weight": 1.0,
             "distribute_weights": bool(mixture.get("distribute_category_weight_by_valid_windows", True)),
             "dataset_stats_group": norm_grouping.get("dataset_group"),
             "dataset_stats_group_template": norm_grouping.get("dataset_group_template"),
             "dataset_id": dataset_id,
+            "frame_filter": frame_filter_config,
         },
         "dataset_weights": {"source_files": category_weights, "sources": {}, "datasets": {}, "embodiments": {}},
         "canonical_action_space": control_space,
@@ -4152,6 +4280,8 @@ def _make_spec(
     local_stats_value = item.get("local_stats_path", inherited.get("local_stats_path"))
     local_meta_value = item.get("local_meta_dir", inherited.get("local_meta_dir"))
     path_index_value = item.get("path_index_dir", inherited.get("path_index_dir"))
+    frame_filter_dir_value = item.get("frame_filter_dir", inherited.get("frame_filter_dir"))
+    frame_filter_config = _merge_mapping(inherited.get("frame_filter"), item.get("frame_filter"))
     local_text_cache_value = item.get(
         "local_text_embedding_cache_dir",
         item.get(
@@ -4195,6 +4325,17 @@ def _make_spec(
         dataset_id=dataset_id,
         robot_id=robot_id,
     )  # data/petrel_cache/path_index/{dataset_id}/{remote}
+    frame_filter_dir_value = frame_filter_dir_value or _format_template(
+        inherited.get("frame_filter_dir_template"),
+        name=dataset_name,
+        path=dataset_path,
+        remote=str(remote_root),
+        source=source_name,
+        relative_remote=relative_remote,
+        embodiment=embodiment,
+        dataset_id=dataset_id,
+        robot_id=robot_id,
+    )
     local_text_cache_value = local_text_cache_value or _format_template(
         inherited.get("local_text_embedding_cache_dir_template"),
         name=dataset_name,
@@ -4265,6 +4406,12 @@ def _make_spec(
         local_stats_path=_optional_str(local_stats_value),  # None
         local_meta_dir=_optional_str(local_meta_value),  # data/petrel_cache/meta/{dataset_id}/{remote}
         path_index_dir=_optional_str(path_index_value),  # data/petrel_cache/path_index/{dataset_id}/{remote}
+        frame_filter_dir=_optional_str(frame_filter_dir_value),
+        frame_filter_enabled=bool(frame_filter_config.get("enabled", False)),
+        frame_filter_required=bool(frame_filter_config.get("required", False)),
+        frame_filter_strict_episode_coverage=bool(frame_filter_config.get("strict_episode_coverage", False)),
+        frame_filter_filename=str(frame_filter_config.get("filename", "frame_filter.jsonl")),
+        frame_filter_window_policy=str(frame_filter_config.get("window_policy", "full_chunk")),
         local_text_embedding_cache_dir=_optional_str(local_text_cache_value),  # None
         context_len=int(item.get("context_len", inherited.get("context_len", 128))), # 128
         text_encoder_id=None, # str(item.get("text_encoder_id", inherited.get("text_encoder_id", "wan22ti2v5b"))),
@@ -4432,6 +4579,9 @@ def _flatten_source_specs(config: dict[str, Any]) -> list[DatasetSpec] | None:
             or cache_templates.get("local_meta_dir"),  # openpi/configs/petrel/pi05_xxx.yaml-storage-metadata_cache
             "path_index_dir_template": source.get("path_index_dir_template")
             or cache_templates.get("path_index_dir"),  # openpi/configs/petrel/pi05_xxx.yaml-storage-path_index_cache
+            "frame_filter_dir_template": source.get("frame_filter_dir_template")
+            or cache_templates.get("frame_filter_dir"),
+            "frame_filter": _merge_mapping(dataset_defaults.get("frame_filter"), source.get("frame_filter")),
             "local_text_embedding_cache_dir_template": source.get(
                 "local_text_embedding_cache_dir_template",
                 emb_cfg.get(

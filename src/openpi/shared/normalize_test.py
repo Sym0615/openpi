@@ -41,3 +41,23 @@ def test_multiple_batch_dimensions():
 
     assert np.allclose(results.mean, expected_mean)
     assert np.allclose(results.std, expected_std)
+
+
+def test_preserve_action_horizon_in_statistics():
+    actions = np.asarray(
+        [
+            [[0.0, 10.0], [100.0, 1000.0]],
+            [[2.0, 14.0], [300.0, 1400.0]],
+        ]
+    )
+    stats = normalize.RunningStats(feature_shape=(2, 2))
+    stats.update(actions)
+
+    results = stats.get_statistics()
+
+    assert results.mean.shape == (2, 2)
+    assert results.std.shape == (2, 2)
+    assert results.q01.shape == (2, 2)
+    assert results.q99.shape == (2, 2)
+    np.testing.assert_allclose(results.mean, np.mean(actions, axis=0))
+    np.testing.assert_allclose(results.std, np.std(actions, axis=0))
