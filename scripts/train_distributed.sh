@@ -5,7 +5,19 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export OPENPI_WORKDIR="${OPENPI_WORKDIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 export OPENPI_RUN_ROOT="${OPENPI_RUN_ROOT:-${OPENPI_WORKDIR}}"
 export PYTHONPATH="${OPENPI_WORKDIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
-export OPENPI_CHECKPOINTS_ROOT="${OPENPI_CHECKPOINTS_ROOT:-${OPENPI_RUN_ROOT}/checkpoints}"
+export OPENPI_CHECKPOINT_STORAGE="${OPENPI_CHECKPOINT_STORAGE:-local}"
+case "${OPENPI_CHECKPOINT_STORAGE}" in
+  local)
+    export OPENPI_CHECKPOINTS_ROOT="${OPENPI_RUN_ROOT}/checkpoints"
+    ;;
+  global)
+    export OPENPI_CHECKPOINTS_ROOT="/wamdata/PI05_CHECKOINTS/checkpoints"
+    ;;
+  *)
+    echo "Invalid OPENPI_CHECKPOINT_STORAGE=${OPENPI_CHECKPOINT_STORAGE}; expected local or global." >&2
+    exit 2
+    ;;
+esac
 
 # Multi-node SSP jobs inject WORLD_SIZE and rendezvous variables. A single-node
 # GPU job may inject none of them, so default that case to one local node.
@@ -99,9 +111,11 @@ Optional training variables:
   OPENPI_PIN_MEMORY, OPENPI_DATALOADER_PREWARM,
   OPENPI_STREAMING_ACCUMULATION, OPENPI_ASYNC_QUEUE_SIZE,
   OPENPI_ZERO_OPTIMIZER,
+  OPENPI_STAGE_PARQUETS, OPENPI_PARQUET_STAGE_WORKERS,
+  OPENPI_PARQUET_CACHE_DIR,
   OPENPI_LOCAL_VIDEO_PATH_DECODE,
   OPENPI_SAVE_INTERVAL, OPENPI_PROFILE, OPENPI_TORCH_TRACE, OPENPI_RESUME,
-  OPENPI_OVERWRITE, OPENPI_WANDB, OPENPI_RUN_ROOT, OPENPI_CHECKPOINTS_ROOT,
+  OPENPI_OVERWRITE, OPENPI_WANDB, OPENPI_RUN_ROOT, OPENPI_CHECKPOINT_STORAGE,
   OPENPI_WEIGHT_PATH,
   OPENPI_BF16_AUTOCAST, OPENPI_COMPILE_TRANSFORMER_LAYERS,
   OPENPI_GRADIENT_CHECKPOINTING,
@@ -158,7 +172,7 @@ done
 NUM_NODES="${WORLD_SIZE}"
 NODE_RANK="${BOOTSTRAP_NODE_RANK}"
 GPUS_PER_NODE="${OPENPI_GPUS_PER_NODE:-8}"
-LOCAL_BATCH_SIZE="${OPENPI_LOCAL_BATCH_SIZE:-64}"
+LOCAL_BATCH_SIZE="${OPENPI_LOCAL_BATCH_SIZE:-32}"
 export OPENPI_CONFIG_NAME="${CLI_CONFIG_NAME:-${OPENPI_CONFIG_NAME:-pi05_abc130k}}"
 
 cd "${OPENPI_WORKDIR}"
@@ -204,7 +218,7 @@ EFFECTIVE_LOCAL_BATCH_SIZE=$((LOCAL_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS))
 export OPENPI_BATCH_SIZE="${GLOBAL_BATCH_SIZE}"
 export OPENPI_GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS}"
 export OPENPI_NUM_WORKERS="${OPENPI_NUM_WORKERS:-16}"
-export OPENPI_WORKER_BATCH_SIZE="${OPENPI_WORKER_BATCH_SIZE:-16}"
+export OPENPI_WORKER_BATCH_SIZE="${OPENPI_WORKER_BATCH_SIZE:-8}"
 export OPENPI_PREFETCH_FACTOR="${OPENPI_PREFETCH_FACTOR:-2}"
 export OPENPI_STREAMING_ACCUMULATION="${OPENPI_STREAMING_ACCUMULATION:-0}"
 export OPENPI_ASYNC_QUEUE_SIZE="${OPENPI_ASYNC_QUEUE_SIZE:-0}"
@@ -221,6 +235,7 @@ export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
 export NCCL_DEBUG_SUBSYS="${NCCL_DEBUG_SUBSYS:-INIT,ENV,NET}"
 export OPENPI_WANDB="${OPENPI_WANDB:-1}"
 export WANDB_MODE="${WANDB_MODE:-online}"
+export WANDB_API_KEY="${WANDB_API_KEY}"
 
 normalize_bool_env() {
   local variable_name="$1"
@@ -244,6 +259,7 @@ normalize_bool_env OPENPI_PIN_MEMORY 0
 normalize_bool_env OPENPI_DATALOADER_PREWARM 1
 normalize_bool_env OPENPI_STREAMING_ACCUMULATION 0
 normalize_bool_env OPENPI_ZERO_OPTIMIZER 0
+normalize_bool_env OPENPI_STAGE_PARQUETS 0
 normalize_bool_env OPENPI_LOCAL_VIDEO_PATH_DECODE 1
 normalize_bool_env OPENPI_BF16_AUTOCAST 0
 normalize_bool_env OPENPI_COMPILE_TRANSFORMER_LAYERS 0
@@ -286,6 +302,11 @@ if [[ ! "${OPENPI_ASYNC_QUEUE_SIZE}" =~ ^[0-9]+$ ]]; then
   echo "OPENPI_ASYNC_QUEUE_SIZE must be a non-negative integer, got: ${OPENPI_ASYNC_QUEUE_SIZE}" >&2
   exit 2
 fi
+export OPENPI_PARQUET_STAGE_WORKERS="${OPENPI_PARQUET_STAGE_WORKERS:-32}"
+if [[ ! "${OPENPI_PARQUET_STAGE_WORKERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "OPENPI_PARQUET_STAGE_WORKERS must be a positive integer, got: ${OPENPI_PARQUET_STAGE_WORKERS}" >&2
+  exit 2
+fi
 if [[ "${OPENPI_STREAMING_ACCUMULATION}" == "1" ]]; then
   DATALOADER_LOCAL_BATCH_SIZE="${LOCAL_BATCH_SIZE}"
 else
@@ -305,6 +326,15 @@ else
     echo "CUDA_VISIBLE_DEVICES exposes ${#VISIBLE_DEVICES[@]} device(s), but ${GPUS_PER_NODE} GPU process(es) were requested." >&2
     exit 2
   fi
+fi
+
+if [[ "${OPENPI_STAGE_PARQUETS}" == "1" ]]; then
+  export OPENPI_PARQUET_CACHE_DIR="${OPENPI_PARQUET_CACHE_DIR:-/dev/shm/openpi-abc130k-parquets}"
+  echo "[train] staging parquet cache=${OPENPI_PARQUET_CACHE_DIR} workers=${OPENPI_PARQUET_STAGE_WORKERS}"
+  "${PYTHON_BIN}" scripts/stage_petrel_parquets.py \
+    --path-index-root data/petrel_cache/path_index/abc130k \
+    --cache-dir "${OPENPI_PARQUET_CACHE_DIR}" \
+    --workers "${OPENPI_PARQUET_STAGE_WORKERS}"
 fi
 
 TORCHRUN_LOG_DIR="${LOG_ROOT}/${OPENPI_RUN_ID}/node_${NODE_RANK}"
@@ -329,10 +359,11 @@ echo "[topology] master=${MASTER_ADDR}:${MASTER_PORT}"
 echo "[topology] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 echo "[train] global_world_size=${GLOBAL_WORLD_SIZE} physical_global_batch_size=${GLOBAL_BATCH_SIZE} physical_local_batch_size=${LOCAL_BATCH_SIZE} effective_global_batch_size=${EFFECTIVE_GLOBAL_BATCH_SIZE} effective_local_batch_size=${EFFECTIVE_LOCAL_BATCH_SIZE} gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS}"
 echo "[train] dataloader_local_batch_size=${DATALOADER_LOCAL_BATCH_SIZE} streaming_accumulation=${OPENPI_STREAMING_ACCUMULATION} async_queue_size=${OPENPI_ASYNC_QUEUE_SIZE}"
-echo "[train] config_name=${OPENPI_CONFIG_NAME} run_id=${OPENPI_RUN_ID} workers_per_rank=${OPENPI_NUM_WORKERS} checkpoint_root=${OPENPI_CHECKPOINTS_ROOT}"
+echo "[train] config_name=${OPENPI_CONFIG_NAME} run_id=${OPENPI_RUN_ID} workers_per_rank=${OPENPI_NUM_WORKERS} checkpoint_storage=${OPENPI_CHECKPOINT_STORAGE} checkpoint_root=${OPENPI_CHECKPOINTS_ROOT}"
 echo "[train] run_dir_template=${OPENPI_CHECKPOINTS_ROOT}/${OPENPI_CONFIG_NAME}/${OPENPI_RUN_ID}_<UTC start time>"
 echo "[train] mode=${TRAIN_MODE} steps=${OPENPI_TRAIN_STEPS} profiling=${OPENPI_PROFILE} torch_trace=${OPENPI_TORCH_TRACE}"
 echo "[train] distributed_strategy=ddp zero_optimizer=${OPENPI_ZERO_OPTIMIZER}"
+echo "[train] stage_parquets=${OPENPI_STAGE_PARQUETS} parquet_cache_dir=${OPENPI_PARQUET_CACHE_DIR:-disabled} parquet_stage_workers=${OPENPI_PARQUET_STAGE_WORKERS}"
 echo "[train] attention=sdpa gradient_checkpointing=${OPENPI_GRADIENT_CHECKPOINTING} bf16_autocast=${OPENPI_BF16_AUTOCAST} compile_transformer_layers=${OPENPI_COMPILE_TRANSFORMER_LAYERS}"
 echo "[logging] torchrun_log_dir=${TORCHRUN_LOG_DIR} tee=stdout+stderr all_ranks"
 echo "[logging] TORCH_DISTRIBUTED_DEBUG=${TORCH_DISTRIBUTED_DEBUG} NCCL_DEBUG=${NCCL_DEBUG} NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS}"

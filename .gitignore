@@ -9,6 +9,7 @@ jobs/
 runs/
 pi05_interna1/
 pi05_abc130k/
+scripts/run_clusterx.sh
 docs/
 .clusterx/
 TODO.md

@@ -1014,7 +1014,7 @@ _CONFIGS = [
         # Pi0 slots; four-camera schemas select top-left and both wrist views.
         name="pi05_abc130k",
         project_name="openpi-abc130k",
-        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=30),
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=30, discrete_state_input=False),
         data=PetrelDataConfig(
             repo_id="abc130k",
             dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_abc130k.yaml"),

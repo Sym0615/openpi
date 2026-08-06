@@ -144,7 +144,7 @@ def main() -> None:
         gradient_accumulation_steps=env_int("OPENPI_GRADIENT_ACCUMULATION_STEPS", config.gradient_accumulation_steps),
         batch_size=env_int("OPENPI_BATCH_SIZE", 64),
         save_interval=env_int("OPENPI_SAVE_INTERVAL", 2000),
-        log_interval=env_int("OPENPI_LOG_INTERVAL", 10),
+        log_interval=env_int("OPENPI_LOG_INTERVAL", 5),
         overwrite=env_bool("OPENPI_OVERWRITE", default=not resume),
         resume=resume,
         wandb_enabled=env_bool("OPENPI_WANDB", default=True),
