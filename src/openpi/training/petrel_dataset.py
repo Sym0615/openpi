@@ -124,9 +124,13 @@ class PetrelDataset(torch.utils.data.Dataset):
         self._resolved_specs: list[Any] | None = None
         self._length: int | None = None
         self._epoch = 0
+        # DataLoader spawn workers receive this tensor through PyTorch's shared-memory
+        # reducer. This lets persistent workers observe epoch changes without being
+        # torn down and recreated at every finite sampler pass.
+        self._shared_epoch = torch.zeros(1, dtype=torch.int64).share_memory_()
         self.prefer_sequential_indices = False
         self.training_block_size = 1
-        self.requires_worker_restart_each_epoch = True
+        self.requires_worker_restart_each_epoch = False
         self.frame_filter_summary: dict[str, Any] = {"enabled": False}
         self.frame_filter_identity: str | None = None
         self._initialize_backend()
@@ -189,6 +193,7 @@ class PetrelDataset(torch.utils.data.Dataset):
             training_block_size=int(mixture_cfg.get("training_block_size", mixture_cfg.get("block_size", 1))),
             training_frame_stride=int(mixture_cfg.get("training_frame_stride", 1)),
         )
+        self._epoch = int(self._shared_epoch[0].item())
         mixed_dataset.set_epoch(self._epoch)
 
         self._datasets = datasets
@@ -337,11 +342,22 @@ class PetrelDataset(torch.utils.data.Dataset):
 
     def set_epoch(self, epoch: int) -> None:
         self._epoch = int(epoch)
+        self._shared_epoch[0] = self._epoch
         if self._mixed_dataset is not None:
             self._mixed_dataset.set_epoch(self._epoch)
 
+    def _sync_worker_epoch(self) -> None:
+        """Apply the main process epoch to a persistent worker's lazy backend."""
+        shared_epoch = int(self._shared_epoch[0].item())
+        if shared_epoch == self._epoch:
+            return
+        self._epoch = shared_epoch
+        if self._mixed_dataset is not None:
+            self._mixed_dataset.set_epoch(shared_epoch)
+
     def _ensure_backend(self) -> tuple[Any, list[Any], Any]:
         self._initialize_backend()
+        self._sync_worker_epoch()
         assert self._datasets is not None
         assert self._mixed_dataset is not None
         return reader, self._datasets, self._mixed_dataset

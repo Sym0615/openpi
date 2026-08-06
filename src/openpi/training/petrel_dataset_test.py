@@ -238,6 +238,32 @@ def test_petrel_dataset_worker_reuses_resolved_specs(monkeypatch, tmp_path):
     assert worker_dataset._datasets is not None  # noqa: SLF001
 
 
+def test_petrel_dataset_persistent_worker_observes_shared_epoch(monkeypatch, tmp_path):
+    config_path = tmp_path / "dataset.yaml"
+    config_path.write_text("mixture: {}", encoding="utf-8")
+    fake = _fake_reader()
+    for name, value in vars(fake).items():
+        monkeypatch.setattr(petrel_dataset.reader, name, value)
+
+    dataset = petrel_dataset.PetrelDataset(
+        petrel_dataset.PetrelDatasetConfig(dataset_config=str(config_path), load_images=False),
+        action_horizon=3,
+        model_action_dim=8,
+    )
+    # A worker has its own Python-side epoch/backend but retains the shared tensor.
+    worker_dataset = object.__new__(petrel_dataset.PetrelDataset)
+    worker_dataset.__dict__ = dict(dataset.__dict__)
+    worker_dataset._epoch = 0  # noqa: SLF001
+    worker_dataset._mixed_dataset = _FakeMixedDataset(worker_dataset._datasets)  # noqa: SLF001
+
+    dataset.set_epoch(7)
+    worker_dataset._ensure_backend()  # noqa: SLF001
+
+    assert not dataset.requires_worker_restart_each_epoch
+    assert worker_dataset._epoch == 7  # noqa: SLF001
+    assert worker_dataset._mixed_dataset.epoch == 7  # noqa: SLF001
+
+
 def _mock_distributed(monkeypatch, *, rank, broadcast_value=None, captured=None):
     distributed = petrel_dataset.reader.torch.distributed
     monkeypatch.setattr(distributed, "is_available", lambda: True)

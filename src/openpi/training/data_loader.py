@@ -564,6 +564,9 @@ class TorchDataLoader:
 
         generator = torch.Generator()
         generator.manual_seed(seed)
+        persistent_workers = num_workers > 0 and not bool(
+            getattr(dataset, "requires_worker_restart_each_epoch", False)
+        )
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
             batch_size=worker_batch_size,
@@ -571,8 +574,7 @@ class TorchDataLoader:
             sampler=sampler,
             num_workers=num_workers,
             multiprocessing_context=mp_context,
-            persistent_workers=num_workers > 0
-            and not bool(getattr(dataset, "requires_worker_restart_each_epoch", False)),
+            persistent_workers=persistent_workers,
             collate_fn=_collate_fn,
             worker_init_fn=_worker_init_fn,
             drop_last=True,
@@ -583,11 +585,12 @@ class TorchDataLoader:
         )
         logging.info(
             "DataLoader worker_batch_size=%d local_batch_size=%d micro_batches_per_step=%d "
-            "workers=%d prefetch_factor=%s in_order=%s pin_memory=%s",
+            "workers=%d persistent_workers=%s prefetch_factor=%s in_order=%s pin_memory=%s",
             worker_batch_size,
             local_batch_size,
             local_batch_size // worker_batch_size,
             num_workers,
+            persistent_workers,
             prefetch_factor,
             in_order,
             pin_memory,
