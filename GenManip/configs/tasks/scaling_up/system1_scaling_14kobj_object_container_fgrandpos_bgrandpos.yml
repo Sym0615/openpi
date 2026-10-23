@@ -1,0 +1,79 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+    rewrite_instruction: true
+  generation_config:
+    action_path:
+      mode: auto
+      robot: 0
+    articulation: []
+    goal:
+    - - obj1_uid:
+        - obj1_0
+        obj2_uid:
+        - obj2
+        position:
+        - top
+    mode: random_all
+    planner: curobo
+  instruction: ''
+  layout_config:
+    ignored_objects: []
+    type: random_all
+  mode: manual
+  num_episode: 100000
+  object_config:
+    background_0: &id001
+      clip_range: &id002
+        max: 0.15
+        min: 0.05
+      filter_rule: []
+      max_cached_num: 10
+      path: object_usds/objaverse_usd
+      type: load_object_from_path
+    background_1: *id001
+    background_2: *id001
+    obj1_0:
+      clip_range: *id002
+      filter_rule:
+      - can_grasp
+      max_cached_num: 10
+      option:
+      - adjust_thickness
+      path: object_usds/objaverse_usd
+      type: load_object_from_path
+    obj2:
+      clip_range:
+        max: 0.45
+        min: 0.2
+      filter_rule:
+      - is_container
+      max_cached_num: 10
+      option:
+      - force_top
+      path: object_usds/objaverse_usd
+      type: load_object_from_path
+  preprocess_config:
+  - config:
+      type: ccd
+    type: ccd
+  - config:
+      config: default
+      type: convexDecomposition
+    type: collider
+  robots:
+  - type: manip/franka/panda_hand
+  table_uid: aa49db8a801d402dac6cf1579536502c
+  task_name: object_container_all_all-top
+  usd_name: scene_usds/base_scenes/base
+evaluation_configs: []

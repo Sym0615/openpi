@@ -1,0 +1,120 @@
+camera1:
+  clipping_range_max: 10000.0
+  clipping_range_min: 0.001
+  exists: false
+  focal_length: 5.0
+  frequency: 60
+  horizontal_aperture: 10.0
+  name: camera1
+  orientation:
+  - -0.0071865058262247095
+  - -0.5792785229595211
+  - -0.005107428795172445
+  - 0.815081996576386
+  position:
+  - 0.28070902824401855
+  - -0.02326910011470318
+  - 1.6857764720916748
+  prim_path: /camera1
+  resolution:
+  - 1280
+  - 720
+  vertical_aperture: 5.625
+  with_distance: true
+  with_semantic: false
+  with_bbox2d: false
+  with_bbox3d: false
+  with_motion_vector: false
+left_camera:
+  exists: true
+  frequency: 60
+  name: left_camera
+  camera_params:
+  - 488.52
+  - 488.52
+  - 323.93
+  - 219.15
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.965
+  - 0.259
+  position:
+  - 0.0
+  - 0.08
+  - 0.05
+  prim_path: /aloha_split/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6/Camera
+  resolution:
+  - 640
+  - 480
+  pixel_size: 2.0
+  f_number: 2.0
+  focus_distance: 0.5
+  with_distance: false
+  with_semantic: false
+  with_bbox2d: false
+  with_bbox3d: false
+  with_motion_vector: false
+  camera_axes: usd
+right_camera:
+  exists: true
+  frequency: 60
+  name: right_camera
+  camera_params:
+  - 488.52
+  - 488.52
+  - 323.93
+  - 219.15
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.972
+  - 0.233
+  position:
+  - 0.0
+  - 0.08
+  - 0.04
+  prim_path: /aloha_split/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6/Camera
+  resolution:
+  - 640
+  - 480
+  pixel_size: 2.0
+  f_number: 2.0
+  focus_distance: 0.5
+  with_distance: false
+  with_semantic: false
+  with_bbox2d: false
+  with_bbox3d: false
+  with_motion_vector: false
+  camera_axes: usd
+top_camera:
+  exists: true
+  frequency: 60
+  name: top_camera
+  camera_params:
+  - 647.04
+  - 646.34
+  - 639.1
+  - 364.36
+  orientation: 
+  - 0.6928386631172024
+  - 0.16759123113078228
+  - -0.19857848727303237
+  - -0.6726472705143391
+  position:
+  - 0.0
+  - -0.00818
+  - 0.1
+  prim_path: /aloha_split/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link/Camera
+  resolution:
+  - 1280
+  - 720
+  pixel_size: 3.0
+  f_number: 2.0
+  focus_distance: 0.6
+  with_distance: false
+  with_semantic: false
+  with_bbox2d: false
+  with_bbox3d: false
+  with_motion_vector: false
+  camera_axes: usd

@@ -1,0 +1,1478 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+      random_visuals:
+      - prim_path: /World/_scene/obj_table/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_shop/textures/table/train/.*\.png$
+      - prim_path: /World/_scene/obj_box0/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_shop/textures/box0_texture/train/.*\.png$
+      - prim_path: /World/_scene/obj_bottle/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_shop/textures/bottle_texture/train/.*\.png$
+      - prim_path: /World/_scene/obj_milk/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_shop/textures/milk_texture/train/.*\.png$
+      - prim_path: /World/_scene/obj_can0/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_shop/textures/can0_texture/train/.*\.png$
+      - prim_path: /World/_scene/obj_can1/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_shop/textures/can1_texture/train/.*\.png$
+      - prim_path: /World/_scene/obj_box1/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_shop/textures/box1_texture/train/.*\.png$
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: manual
+      actions:
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: box0
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: box0
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: true
+            rel_object_uid: box0
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.25
+            orientation:
+            - 0.5
+            - 0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.15
+            - 0.07
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.3
+            - -0.17
+            - 0.07
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.35
+            orientation:
+            - 0.5
+            - 0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            grasp: false
+            arm: right
+            cnt: 50
+            type: reset
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.1
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.4
+            - 0.0
+            - 0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place0
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place1
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: false
+            arm: left
+            cnt: 50
+            type: reset
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: bottle
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: bottle
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: true
+            rel_object_uid: bottle
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.15
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.3
+            - -0.2
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            grasp: false
+            arm: right
+            cnt: 50
+            type: reset
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.1
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.4
+            - 0.1
+            - 0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place0
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place1
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: false
+            arm: left
+            cnt: 50
+            type: reset
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: milk
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: milk
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: milk
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: true
+            rel_object_uid: milk
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.15
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.3
+            - -0.2
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            grasp: false
+            arm: right
+            cnt: 50
+            type: reset
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.1
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.4
+            - 0.1
+            - 0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place0
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place1
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: false
+            arm: left
+            cnt: 50
+            type: reset
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: box1
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: box1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: box1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: true
+            rel_object_uid: box1
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.25
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.35
+            - -0.05
+            - 0.03
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.35
+            - -0.1
+            - 0.03
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            grasp: false
+            arm: right
+            cnt: 50
+            type: reset
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.1
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.4
+            - 0.1
+            - 0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place0
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place1
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: false
+            arm: left
+            cnt: 50
+            type: reset
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: can1
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: can1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: can1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.4
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: true
+            rel_object_uid: can1
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.15
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.3
+            - -0.2
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            grasp: false
+            arm: right
+            cnt: 50
+            type: reset
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.1
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.4
+            - 0.1
+            - 0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place0
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place1
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: false
+            arm: left
+            cnt: 50
+            type: reset
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: can0
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: can0
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: can0
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.5
+            - 0.5
+            - -0.5
+            - 0.5
+            grasp: true
+            rel_object_uid: can0
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.15
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.3
+            - -0.2
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.15
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            grasp: false
+            arm: right
+            cnt: 50
+            type: reset
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.1
+            - 0.03
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - -0.707
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.4
+            - 0.1
+            - 0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place0
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: place1
+        arm: left
+        grasp: true
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: false
+            arm: left
+            cnt: 50
+            type: reset
+      robot: 0
+    articulation: []
+    goal:
+    - - - type: manip/default/sr_based_genmanip_range
+          obj1_uid: milk
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -2.12
+          - -1.59
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          never_reset: true
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: bottle
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -2.12
+          - -1.59
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          never_reset: true
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: box0
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -2.12
+          - -1.59
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          never_reset: true
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: box1
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -2.12
+          - -1.59
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          never_reset: true
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: can0
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -2.12
+          - -1.59
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          never_reset: true
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: can1
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -2.12
+          - -1.59
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          never_reset: true
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: milk
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -1.59
+          - -0.75
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: bottle
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -1.59
+          - -0.75
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: box0
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -1.59
+          - -0.75
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: box1
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -1.59
+          - -0.75
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: can0
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -1.59
+          - -0.75
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          succ_cnts: 30
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: can1
+          x_type: absolute
+          y_type: absolute
+          z_type: none
+          x_range:
+          - -1.59
+          - -0.75
+          y_range:
+          - -1.05
+          - -0.48
+          z_range:
+          - 0.0
+          - 0.0
+          succ_cnts: 30
+          skip_steps: 5
+    mode: manual
+    planner: curobo
+  instruction: Scan all the items at the checkout counter.
+  layout_config:
+    ignored_objects: []
+    type: random_custom_tableset
+    custom_tableset:
+    - box0:
+        w: 0.15
+        h: 0.15
+        angle: 30
+        angle_bilateral: false
+        type: centric_range
+      box1:
+        w: 0.15
+        h: 0.15
+        angle: 30
+        angle_bilateral: true
+        type: centric_range
+      can0:
+        w: 0.15
+        h: 0.15
+        angle: 30
+        angle_bilateral: true
+        type: centric_range
+      can1:
+        w: 0.15
+        h: 0.15
+        angle: 30
+        angle_bilateral: true
+        type: centric_range
+      milk:
+        w: 0.15
+        h: 0.15
+        angle: 30
+        angle_bilateral: true
+        type: centric_range
+      bottle:
+        w: 0.15
+        h: 0.15
+        angle: 30
+        angle_bilateral: true
+        type: centric_range
+  mode: manual
+  num_episode: 250
+  object_config:
+    can0:
+      type: existed_object
+      uid_list:
+      - can0
+      is_not_rigid: true
+      without_colliders: true
+    can1:
+      type: existed_object
+      uid_list:
+      - can1
+      is_not_rigid: true
+      without_colliders: true
+    box0:
+      type: existed_object
+      uid_list:
+      - box0
+      is_not_rigid: true
+      without_colliders: true
+    box1:
+      type: existed_object
+      uid_list:
+      - box1
+      is_not_rigid: true
+      without_colliders: true
+    bottle:
+      type: existed_object
+      uid_list:
+      - bottle
+      is_not_rigid: true
+      without_colliders: true
+    milk:
+      type: existed_object
+      uid_list:
+      - milk
+      is_not_rigid: true
+      without_colliders: true
+    place0:
+      type: existed_object
+      uid_list:
+      - place0
+      is_not_rigid: true
+      without_colliders: true
+    place1:
+      type: existed_object
+      uid_list:
+      - place1
+      is_not_rigid: true
+      without_colliders: true
+  preprocess_config: []
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - -1.8
+    - -0.1
+    - -0.38
+    orientation:
+    - 0.70711
+    - 0.0
+    - 0.0
+    - -0.70711
+  table_uid: table
+  task_name: ebench/mobile_manip/shop
+  usd_name: scene_usds/ebench/long_horizon/scene_shop/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+evaluation_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+  num_test: 10
+  num_steps: 3000
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - -1.8
+    - -0.03
+    - -0.38
+    orientation:
+    - 0.70711
+    - 0.0
+    - 0.0
+    - -0.70711
+  table_uid: table
+  task_name: ebench/mobile_manip/shop_val_train_20p
+  usd_name: scene_usds/ebench/long_horizon/scene_shop/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

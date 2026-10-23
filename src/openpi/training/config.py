@@ -1116,6 +1116,50 @@ _CONFIGS = [
         exp_name="debug_pi05",
         wandb_enabled=False,
     ),
+    TrainConfig(
+        name="pi05_abc_sim",
+        project_name="openpi-abc-sim",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=30),
+        data=PetrelDataConfig(
+            repo_id="abc_sim",
+            dataset=PetrelDatasetConfig(dataset_config="configs/petrel/pi05_abc_sim.yaml"),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="./data/models/pi05_base_pytorch_bf16",
+        pytorch_training_precision="bfloat16",
+        # Physical global batch: 64 GPUs x 13. Four microbatches per optimizer step.
+        batch_size=832,
+        gradient_accumulation_steps=4,
+        fsdp_devices=8,
+        num_workers=16,
+        # 75,000 x 3328 / 37,999,963 filtered windows ~= 6.57 equivalent epochs.
+        num_train_steps=75_000,
+        lr_schedule=_optimizer.CosineDecaySchedule(decay_steps=75_000),
+        save_interval=5_000,
+    ),
+    TrainConfig(
+        name="pi05_abc_sim_bottles",
+        project_name="openpi-abc-sim",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=30,
+        ),
+        data=PetrelDataConfig(
+            repo_id="abc_sim_bottles",
+            dataset=PetrelDatasetConfig(
+                dataset_config="configs/petrel/pi05_abc_sim_bottles.yaml",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        batch_size=128,
+        fsdp_devices=8,
+        num_workers=4,
+        num_train_steps=30_000,
+        save_interval=2_000,
+    ),
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),

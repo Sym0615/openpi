@@ -1,0 +1,763 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+      random_visuals:
+      - prim_path: /World/_scene/layout/DomeLight
+        type: dome_light
+        assets_pattern: scene_usds/ebench/long_horizon/scene_detergent/dome_light/train/.*\.exr$
+      - prim_path: /World/_scene/layout/Meshes/BaseAnimation/cabinet/model_8501f1c9aca40c19149a452243e223e8_0/Looks/_e94205b7fdaa4000170a2a5_index120274/Num5dd77cea7d6a630001bffad3
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/layout/Meshes/BaseAnimation/cabinet/model_8501f1c9aca40c19149a452243e223e8_0/Looks/_d33c408b5cb690001741df5_index119129/Num5dd77cea7d6a630001bffad3
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: manual
+      actions:
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - -0.14
+            - 0.15
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: detergent2
+            type: object_frame
+          - name: left
+            translation:
+            - -0.14
+            - 0.04
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: detergent2
+            type: object_frame
+          - name: left
+            translation:
+            - -0.14
+            - 0.04
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_object_uid: detergent2
+            type: object_frame
+          - name: left
+            translation:
+            - 0.25
+            - -0.05
+            - 0.28
+            orientation:
+            - 0.70711
+            - 0.0
+            - 0.0
+            - -0.70711
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: true
+            cnt: 1
+            type: pending
+          right:
+          - name: right
+            translation:
+            - 0.2
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: false
+            rel_object_uid: detergent2
+            type: object_frame
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: false
+            rel_object_uid: detergent2
+            type: object_frame
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent2
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - 0.25
+            - 0.0
+            - 0.28
+            orientation:
+            - 0.70711
+            - 0.0
+            - 0.0
+            - -0.70711
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            cnt: 50
+            grasp: false
+            type: reset
+          right:
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent2
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.14
+            - 0.02
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent2
+            type: object_frame
+          - name: right
+            translation:
+            - -0.2
+            - 0.25
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            translation:
+            - -0.14
+            - 0.21
+            - 0.0
+            orientation:
+            - 0.6532814824381883
+            - -0.6532814824381883
+            - 0.2705980500730985
+            - -0.2705980500730985
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            translation:
+            - -0.14
+            - 0.21
+            - 0.0
+            orientation:
+            - 0.6532814824381883
+            - -0.6532814824381883
+            - 0.2705980500730985
+            - -0.2705980500730985
+            grasp: false
+            rel_object_uid: basket
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - -0.14
+            - 0.15
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: detergent3
+            type: object_frame
+          - name: left
+            translation:
+            - -0.14
+            - 0.04
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: detergent3
+            type: object_frame
+          - name: left
+            translation:
+            - -0.14
+            - 0.04
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_object_uid: detergent3
+            type: object_frame
+          - name: left
+            translation:
+            - -0.3
+            - 0.2
+            - -0.4
+            orientation:
+            - 0.5
+            - -0.5
+            - -0.5
+            - -0.5
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          right:
+          - name: right
+            cnt: 50
+            grasp: false
+            type: reset
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: true
+            cnt: 1
+            type: pending
+          right:
+          - name: right
+            translation:
+            - 0.2
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: false
+            rel_object_uid: detergent3
+            type: object_frame
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: false
+            rel_object_uid: detergent3
+            type: object_frame
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent3
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - 0.25
+            - 0.0
+            - 0.28
+            orientation:
+            - 0.70711
+            - 0.0
+            - 0.0
+            - -0.70711
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            cnt: 50
+            grasp: false
+            type: reset
+          right:
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent3
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.14
+            - 0.02
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent3
+            type: object_frame
+          - name: right
+            translation:
+            - -0.2
+            - 0.25
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            translation:
+            - -0.14
+            - 0.21
+            - 0.0
+            orientation:
+            - 0.6532814824381883
+            - -0.6532814824381883
+            - 0.2705980500730985
+            - -0.2705980500730985
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            translation:
+            - -0.14
+            - 0.21
+            - 0.0
+            orientation:
+            - 0.6532814824381883
+            - -0.6532814824381883
+            - 0.2705980500730985
+            - -0.2705980500730985
+            grasp: false
+            rel_object_uid: basket
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - -0.14
+            - 0.15
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: detergent1
+            type: object_frame
+          - name: left
+            translation:
+            - -0.14
+            - 0.04
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: detergent1
+            type: object_frame
+          - name: left
+            translation:
+            - -0.14
+            - 0.04
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_object_uid: detergent1
+            type: object_frame
+          - name: left
+            translation:
+            - 0.25
+            - -0.05
+            - 0.28
+            orientation:
+            - 0.70711
+            - 0.0
+            - 0.0
+            - -0.70711
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          right:
+          - name: right
+            cnt: 50
+            grasp: false
+            type: reset
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: true
+            cnt: 1
+            type: pending
+          right:
+          - name: right
+            translation:
+            - 0.2
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: false
+            rel_object_uid: detergent1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: false
+            rel_object_uid: detergent1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent1
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - 0.25
+            - 0.0
+            - 0.28
+            orientation:
+            - 0.70711
+            - 0.0
+            - 0.0
+            - -0.70711
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            cnt: 50
+            grasp: false
+            type: reset
+          right:
+          - name: right
+            translation:
+            - 0.14
+            - -0.03
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent1
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.14
+            - 0.02
+            - 0.0
+            orientation:
+            - 0.0
+            - 0.0
+            - 0.70711
+            - 0.70711
+            grasp: true
+            rel_object_uid: detergent1
+            type: object_frame
+          - name: right
+            translation:
+            - -0.2
+            - 0.25
+            - 0.0
+            orientation:
+            - 0.70711
+            - -0.70711
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            translation:
+            - -0.14
+            - 0.21
+            - 0.0
+            orientation:
+            - 0.6532814824381883
+            - -0.6532814824381883
+            - 0.2705980500730985
+            - -0.2705980500730985
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            translation:
+            - -0.14
+            - 0.21
+            - 0.0
+            orientation:
+            - 0.6532814824381883
+            - -0.6532814824381883
+            - 0.2705980500730985
+            - -0.2705980500730985
+            grasp: false
+            rel_object_uid: basket
+            type: object_frame
+      robot: 0
+    articulation: []
+    goal:
+    - - obj1_uid:
+        - detergent1
+        obj2_uid:
+        - basket
+        position:
+        - top
+      - obj1_uid:
+        - detergent2
+        obj2_uid:
+        - basket
+        position:
+        - top
+      - obj1_uid:
+        - detergent3
+        obj2_uid:
+        - basket
+        position:
+        - top
+    mode: manual
+    planner: curobo
+  instruction: Put all the detergents into the basket.
+  layout_config:
+    ignored_objects: []
+    type: random_custom_tableset
+    custom_tableset:
+    - detergent1:
+        position:
+        - 0.9
+        - 0.17
+        - 1.1
+        orientation:
+        - 0.70711
+        - 0.70711
+        - 0.0
+        - 0.0
+        reset_orientation: true
+        w: 0.15
+        h: 0.15
+        angle: 0
+        buffer_size: 0.05
+        angle_bilateral: false
+        type: centric_range
+      detergent2:
+        position:
+        - 0.8
+        - 0.07
+        - 1.1
+        orientation:
+        - 0.70711
+        - 0.70711
+        - 0.0
+        - 0.0
+        reset_orientation: true
+        w: 0.15
+        h: 0.15
+        angle: 0
+        buffer_size: 0.05
+        angle_bilateral: false
+        type: centric_range
+      detergent3:
+        position:
+        - 0.8
+        - 0.26
+        - 1.1
+        orientation:
+        - 0.70711
+        - 0.70711
+        - 0.0
+        - 0.0
+        reset_orientation: true
+        w: 0.1
+        h: 0.1
+        angle: 0
+        buffer_size: 0.05
+        angle_bilateral: false
+        type: centric_range
+  mode: manual
+  num_episode: 250
+  object_config:
+    detergent1:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_detergent/detergent/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    detergent2:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_detergent/detergent/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    detergent3:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_detergent/detergent/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    basket:
+      type: existed_object
+      uid_list:
+      - '03'
+      is_not_rigid: true
+      without_colliders: true
+  preprocess_config: []
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 0.2
+    - 0.0
+    - 0.27
+    orientation:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  table_uid: table
+  task_name: ebench/mobile_manip/detergent
+  usd_name: scene_usds/ebench/long_horizon/scene_detergent/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+evaluation_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+  num_test: 12
+  num_steps: 5000
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 0.1
+    - 0.0
+    - 0.27
+    orientation:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  table_uid: table
+  task_name: ebench/mobile_manip/detergent_val_unseen_20p
+  usd_name: scene_usds/ebench/long_horizon/scene_detergent/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

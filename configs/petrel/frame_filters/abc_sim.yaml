@@ -1,0 +1,307 @@
+schema: openpi_abcsim_quality_filter_v1
+dataset_id: abc_sim
+leaf_path: train
+min_slice_frames: 1
+reference:
+  run_manifest: /dataset/public/meta/filter/ABC-130K-v3/train/arrange_the_flowers_into_the_vase/schema=4cam_stereo_top__1920x1200__hevc/runs/e9a9768babfcd94d/run_manifest.json
+  run_id: e9a9768babfcd94d
+  omitted_stages:
+  - fk_consistency
+  unavailable_signals:
+  - logged_ee_pose
+  - joint_velocity
+  - joint_effort
+  notes: Same ABC130K numeric thresholds and trim->quality groups on available named
+    joint/gripper signals. Training EE remains derived by FK.
+signals:
+  action_left_gripper_position:
+    dim_names:
+    - action.left.gripper1
+    include_dims: null
+    orientation: []
+    roles:
+    - gripper
+    scale: null
+    source_key: actions.left_gripper.position
+  action_left_joint_position:
+    dim_names:
+    - action.left.joint1
+    - action.left.joint2
+    - action.left.joint3
+    - action.left.joint4
+    - action.left.joint5
+    - action.left.joint6
+    include_dims: null
+    orientation: []
+    roles:
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    scale: null
+    source_key: actions.left_joint.position
+  action_right_gripper_position:
+    dim_names:
+    - action.right.gripper1
+    include_dims: null
+    orientation: []
+    roles:
+    - gripper
+    scale: null
+    source_key: actions.right_gripper.position
+  action_right_joint_position:
+    dim_names:
+    - action.right.joint1
+    - action.right.joint2
+    - action.right.joint3
+    - action.right.joint4
+    - action.right.joint5
+    - action.right.joint6
+    include_dims: null
+    orientation: []
+    roles:
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    scale: null
+    source_key: actions.right_joint.position
+  state_left_gripper_position:
+    dim_names:
+    - state.left.gripper1
+    include_dims: null
+    orientation: []
+    roles:
+    - gripper
+    scale: null
+    source_key: states.left_gripper.position
+  state_left_joint_position:
+    dim_names:
+    - state.left.joint1
+    - state.left.joint2
+    - state.left.joint3
+    - state.left.joint4
+    - state.left.joint5
+    - state.left.joint6
+    include_dims: null
+    orientation: []
+    roles:
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    scale: null
+    source_key: states.left_joint.position
+  state_right_gripper_position:
+    dim_names:
+    - state.right.gripper1
+    include_dims: null
+    orientation: []
+    roles:
+    - gripper
+    scale: null
+    source_key: states.right_gripper.position
+  state_right_joint_position:
+    dim_names:
+    - state.right.joint1
+    - state.right.joint2
+    - state.right.joint3
+    - state.right.joint4
+    - state.right.joint5
+    - state.right.joint6
+    include_dims: null
+    orientation: []
+    roles:
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    - joint
+    scale: null
+    source_key: states.right_joint.position
+pipeline:
+- group: trim
+  stages:
+    motionless:
+      type: MotionlessTrimFilter
+      config:
+        abs_floor: 1.0e-06
+        ceiling: 0.3
+        drop_all_static: false
+        drop_too_short_after_trim: false
+        floor: 0.03
+        frac: 0.15
+        inputs:
+          diagnostic:
+          - action_left_gripper_position
+          - action_left_joint_position
+          - action_right_gripper_position
+          - action_right_joint_position
+          score:
+          - state_left_gripper_position
+          - state_left_joint_position
+          - state_right_gripper_position
+          - state_right_joint_position
+        min_active_run: 3
+        min_high: 0.2
+        min_kept_frames: 33
+        min_range: 0.12
+        min_trim_frames: 8
+        not_applicable_policy: keep
+        post_roll: 2
+        pre_roll: 2
+        static_abs_floor: 1.0e-08
+- group: quality
+  stages:
+    sudden_change:
+      type: SuddenChangeFilter
+      config:
+        inputs:
+        - action_left_gripper_position
+        - action_left_joint_position
+        - action_right_gripper_position
+        - action_right_joint_position
+        - state_left_gripper_position
+        - state_left_joint_position
+        - state_right_gripper_position
+        - state_right_joint_position
+        min_episode_len: 8
+        multiplier: 1.25
+        not_applicable_policy: keep
+        scale_accel: 6.0
+        scale_jerk: 6.0
+        scale_residual: 6.0
+    trend_alignment:
+      type: TrendAlignmentFilter
+      config:
+        allow_negative_lag: 0
+        comparisons:
+        - action_semantics: absolute
+          action_signal: action_left_gripper_position
+          dim_map:
+            0: 0
+          dims:
+          - 0
+          gripper_dims:
+          - 0
+          gripper_threshold: 0.65
+          mandatory_dims: []
+          name: left_gripper_abs
+          not_applicable_policy: keep
+          optional_dims:
+          - 0
+          skip_dims: []
+          state_signal: state_left_gripper_position
+          action_timing: leads_state
+          delta_compare_mode: integrate
+          threshold: 0.65
+          low_motion_policy: keep
+        - action_semantics: absolute
+          action_signal: action_left_joint_position
+          dim_map:
+            0: 0
+            1: 1
+            2: 2
+            3: 3
+            4: 4
+            5: 5
+          dims:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          gripper_dims: []
+          low_motion_policy: keep
+          mandatory_dims:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          name: left_joint_abs
+          not_applicable_policy: filter
+          optional_dims: []
+          skip_dims: []
+          state_signal: state_left_joint_position
+          threshold: 0.65
+          action_timing: leads_state
+          delta_compare_mode: integrate
+          gripper_threshold: 0.65
+        - action_semantics: absolute
+          action_signal: action_right_gripper_position
+          dim_map:
+            0: 0
+          dims:
+          - 0
+          gripper_dims:
+          - 0
+          gripper_threshold: 0.65
+          mandatory_dims: []
+          name: right_gripper_abs
+          not_applicable_policy: keep
+          optional_dims:
+          - 0
+          skip_dims: []
+          state_signal: state_right_gripper_position
+          action_timing: leads_state
+          delta_compare_mode: integrate
+          threshold: 0.65
+          low_motion_policy: keep
+        - action_semantics: absolute
+          action_signal: action_right_joint_position
+          dim_map:
+            0: 0
+            1: 1
+            2: 2
+            3: 3
+            4: 4
+            5: 5
+          dims:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          gripper_dims: []
+          low_motion_policy: keep
+          mandatory_dims:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          name: right_joint_abs
+          not_applicable_policy: filter
+          optional_dims: []
+          skip_dims: []
+          state_signal: state_right_joint_position
+          threshold: 0.65
+          action_timing: leads_state
+          delta_compare_mode: integrate
+          gripper_threshold: 0.65
+        eps_frac: 0.15
+        lag_corr_tolerance: 0.0
+        max_bad_dims: 1
+        max_lag: 10
+        mean_window: 7
+        median_window: 5
+        min_da_points: 8
+        min_length: 24
+        min_motion_diff_scale: 0.0
+        min_motion_range: 0.01
+        min_overlap: 16
+        threshold: 0.65
+        not_applicable_policy: filter
+        gripper_threshold: null

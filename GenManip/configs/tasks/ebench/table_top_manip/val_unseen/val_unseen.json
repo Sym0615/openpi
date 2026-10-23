@@ -1,0 +1,9 @@
+[
+    "ebench/table_top_manip/val_unseen/collect_coffee_beans.yml",
+    "ebench/table_top_manip/val_unseen/flip_cup_collect_cookies.yml",
+    "ebench/table_top_manip/val_unseen/frame_against_pen_holder.yml",
+    "ebench/table_top_manip/val_unseen/install_gear.yml",
+    "ebench/table_top_manip/val_unseen/peg_in_hole.yml",
+    "ebench/table_top_manip/val_unseen/put_glass_in_glassbox.yml",
+    "ebench/table_top_manip/val_unseen/tighten_nut.yml"
+]

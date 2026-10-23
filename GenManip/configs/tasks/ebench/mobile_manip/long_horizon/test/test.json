@@ -1,0 +1,11 @@
+[
+    "ebench/mobile_manip/test/bottle.yml",
+    "ebench/mobile_manip/test/detergent.yml",
+    "ebench/mobile_manip/test/dish.yml",
+    "ebench/mobile_manip/test/dishwasher.yml",
+    "ebench/mobile_manip/test/fruit.yml",
+    "ebench/mobile_manip/test/make_sandwich.yml",
+    "ebench/mobile_manip/test/microwave.yml",
+    "ebench/mobile_manip/test/pen.yml",
+    "ebench/mobile_manip/test/shop.yml"
+]

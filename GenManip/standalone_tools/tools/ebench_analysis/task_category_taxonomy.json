@@ -1,0 +1,636 @@
+{
+  "tasks": {
+    "mobile_manip/apple_from_shelf": {
+      "bench": "mobile_manip",
+      "task": "apple_from_shelf",
+      "scene": "supermarket",
+      "atomic_skills": [
+        "grasp",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 2
+    },
+    "mobile_manip/apple_to_fruit_bowl": {
+      "bench": "mobile_manip",
+      "task": "apple_to_fruit_bowl",
+      "scene": "home-dining_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/bookmark_on_book": {
+      "bench": "mobile_manip",
+      "task": "bookmark_on_book",
+      "scene": "home-study",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/bottle": {
+      "bench": "mobile_manip",
+      "task": "bottle",
+      "scene": "logistics",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "long-horizon",
+      "precision": "medium",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/bowl_to_plate": {
+      "bench": "mobile_manip",
+      "task": "bowl_to_plate",
+      "scene": "home-kitchen",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/detergent": {
+      "bench": "mobile_manip",
+      "task": "detergent",
+      "scene": "home-bathroom",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "handover"
+      ],
+      "range": "long-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/dish": {
+      "bench": "mobile_manip",
+      "task": "dish",
+      "scene": "home-dining_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "long-horizon",
+      "precision": "medium",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/dishwasher": {
+      "bench": "mobile_manip",
+      "task": "dishwasher",
+      "scene": "home-kitchen",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move",
+        "pull",
+        "sweep",
+        "push"
+      ],
+      "range": "long-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 6
+    },
+    "mobile_manip/fruit": {
+      "bench": "mobile_manip",
+      "task": "fruit",
+      "scene": "home-dining_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move",
+        "handover",
+        "pour"
+      ],
+      "range": "long-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 5
+    },
+    "mobile_manip/make_sandwich": {
+      "bench": "mobile_manip",
+      "task": "make_sandwich",
+      "scene": "home-kitchen",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move",
+        "sweep"
+      ],
+      "range": "long-horizon",
+      "precision": "medium",
+      "mobility": "mobile",
+      "atomic_skill_count": 4
+    },
+    "mobile_manip/microwave": {
+      "bench": "mobile_manip",
+      "task": "microwave",
+      "scene": "home-dining_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move",
+        "pull",
+        "sweep"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 5
+    },
+    "mobile_manip/pen": {
+      "bench": "mobile_manip",
+      "task": "pen",
+      "scene": "home-study",
+      "atomic_skills": [
+        "grasp",
+        "insert"
+      ],
+      "range": "short-horizon",
+      "precision": "medium",
+      "mobility": "mobile",
+      "atomic_skill_count": 2
+    },
+    "mobile_manip/perfume_to_cosmetics_rack": {
+      "bench": "mobile_manip",
+      "task": "perfume_to_cosmetics_rack",
+      "scene": "home-bedroom",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/remote_to_holder": {
+      "bench": "mobile_manip",
+      "task": "remote_to_holder",
+      "scene": "home-living_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/salt_to_spice_rack": {
+      "bench": "mobile_manip",
+      "task": "salt_to_spice_rack",
+      "scene": "home-kitchen",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/shop": {
+      "bench": "mobile_manip",
+      "task": "shop",
+      "scene": "supermarket",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move",
+        "sweep",
+        "handover"
+      ],
+      "range": "long-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 5
+    },
+    "mobile_manip/soap_to_dish": {
+      "bench": "mobile_manip",
+      "task": "soap_to_dish",
+      "scene": "home-bathroom",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "medium",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/teacup_to_saucer_teapot_to_tray": {
+      "bench": "mobile_manip",
+      "task": "teacup_to_saucer_teapot_to_tray",
+      "scene": "home-living_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "medium",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "mobile_manip/utensils_to_holder": {
+      "bench": "mobile_manip",
+      "task": "utensils_to_holder",
+      "scene": "home-kitchen",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "move"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "mobile",
+      "atomic_skill_count": 3
+    },
+    "table_top_manip/collect_coffee_beans": {
+      "bench": "table_top_manip",
+      "task": "collect_coffee_beans",
+      "scene": "home-dining_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "sweep",
+        "insert"
+      ],
+      "range": "short-horizon",
+      "precision": "high",
+      "mobility": "fixed",
+      "atomic_skill_count": 4
+    },
+    "table_top_manip/flip_cup_collect_cookies": {
+      "bench": "table_top_manip",
+      "task": "flip_cup_collect_cookies",
+      "scene": "home-dining_room",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "handover",
+        "flip",
+        "pour"
+      ],
+      "range": "short-horizon",
+      "precision": "medium",
+      "mobility": "fixed",
+      "atomic_skill_count": 5
+    },
+    "table_top_manip/frame_against_pen_holder": {
+      "bench": "table_top_manip",
+      "task": "frame_against_pen_holder",
+      "scene": "home-living_room",
+      "atomic_skills": [
+        "grasp",
+        "handover",
+        "flip",
+        "place"
+      ],
+      "range": "short-horizon",
+      "precision": "low",
+      "mobility": "fixed",
+      "atomic_skill_count": 4
+    },
+    "table_top_manip/install_gear": {
+      "bench": "table_top_manip",
+      "task": "install_gear",
+      "scene": "industrial",
+      "atomic_skills": [
+        "grasp",
+        "place"
+      ],
+      "range": "short-horizon",
+      "precision": "high",
+      "mobility": "fixed",
+      "atomic_skill_count": 2
+    },
+    "table_top_manip/peg_in_hole": {
+      "bench": "table_top_manip",
+      "task": "peg_in_hole",
+      "scene": "industrial",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "insert"
+      ],
+      "range": "short-horizon",
+      "precision": "high",
+      "mobility": "fixed",
+      "atomic_skill_count": 3
+    },
+    "table_top_manip/put_glass_in_glassbox": {
+      "bench": "table_top_manip",
+      "task": "put_glass_in_glassbox",
+      "scene": "home-study",
+      "atomic_skills": [
+        "grasp",
+        "place",
+        "press"
+      ],
+      "range": "short-horizon",
+      "precision": "medium",
+      "mobility": "fixed",
+      "atomic_skill_count": 3
+    },
+    "table_top_manip/tighten_nut": {
+      "bench": "table_top_manip",
+      "task": "tighten_nut",
+      "scene": "industrial",
+      "atomic_skills": [
+        "grasp",
+        "place"
+      ],
+      "range": "short-horizon",
+      "precision": "high",
+      "mobility": "fixed",
+      "atomic_skill_count": 2
+    }
+  },
+  "categories": {
+    "scene": {
+      "supermarket": [
+        "mobile_manip/apple_from_shelf",
+        "mobile_manip/shop"
+      ],
+      "home-dining_room": [
+        "mobile_manip/apple_to_fruit_bowl",
+        "mobile_manip/dish",
+        "mobile_manip/fruit",
+        "mobile_manip/microwave",
+        "table_top_manip/collect_coffee_beans",
+        "table_top_manip/flip_cup_collect_cookies"
+      ],
+      "home-study": [
+        "mobile_manip/bookmark_on_book",
+        "mobile_manip/pen",
+        "table_top_manip/put_glass_in_glassbox"
+      ],
+      "logistics": [
+        "mobile_manip/bottle"
+      ],
+      "home-kitchen": [
+        "mobile_manip/bowl_to_plate",
+        "mobile_manip/dishwasher",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/salt_to_spice_rack",
+        "mobile_manip/utensils_to_holder"
+      ],
+      "home-bathroom": [
+        "mobile_manip/detergent",
+        "mobile_manip/soap_to_dish"
+      ],
+      "home-bedroom": [
+        "mobile_manip/perfume_to_cosmetics_rack"
+      ],
+      "home-living_room": [
+        "mobile_manip/remote_to_holder",
+        "mobile_manip/teacup_to_saucer_teapot_to_tray",
+        "table_top_manip/frame_against_pen_holder"
+      ],
+      "industrial": [
+        "table_top_manip/install_gear",
+        "table_top_manip/peg_in_hole",
+        "table_top_manip/tighten_nut"
+      ]
+    },
+    "atomic_skill": {
+      "grasp": [
+        "mobile_manip/apple_from_shelf",
+        "mobile_manip/apple_to_fruit_bowl",
+        "mobile_manip/bookmark_on_book",
+        "mobile_manip/bottle",
+        "mobile_manip/bowl_to_plate",
+        "mobile_manip/detergent",
+        "mobile_manip/dish",
+        "mobile_manip/dishwasher",
+        "mobile_manip/fruit",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/microwave",
+        "mobile_manip/pen",
+        "mobile_manip/perfume_to_cosmetics_rack",
+        "mobile_manip/remote_to_holder",
+        "mobile_manip/salt_to_spice_rack",
+        "mobile_manip/shop",
+        "mobile_manip/soap_to_dish",
+        "mobile_manip/teacup_to_saucer_teapot_to_tray",
+        "mobile_manip/utensils_to_holder",
+        "table_top_manip/collect_coffee_beans",
+        "table_top_manip/flip_cup_collect_cookies",
+        "table_top_manip/frame_against_pen_holder",
+        "table_top_manip/install_gear",
+        "table_top_manip/peg_in_hole",
+        "table_top_manip/put_glass_in_glassbox",
+        "table_top_manip/tighten_nut"
+      ],
+      "move": [
+        "mobile_manip/apple_from_shelf",
+        "mobile_manip/apple_to_fruit_bowl",
+        "mobile_manip/bookmark_on_book",
+        "mobile_manip/bottle",
+        "mobile_manip/bowl_to_plate",
+        "mobile_manip/dish",
+        "mobile_manip/dishwasher",
+        "mobile_manip/fruit",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/microwave",
+        "mobile_manip/perfume_to_cosmetics_rack",
+        "mobile_manip/remote_to_holder",
+        "mobile_manip/salt_to_spice_rack",
+        "mobile_manip/shop",
+        "mobile_manip/soap_to_dish",
+        "mobile_manip/teacup_to_saucer_teapot_to_tray",
+        "mobile_manip/utensils_to_holder"
+      ],
+      "place": [
+        "mobile_manip/apple_to_fruit_bowl",
+        "mobile_manip/bookmark_on_book",
+        "mobile_manip/bottle",
+        "mobile_manip/bowl_to_plate",
+        "mobile_manip/detergent",
+        "mobile_manip/dish",
+        "mobile_manip/dishwasher",
+        "mobile_manip/fruit",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/microwave",
+        "mobile_manip/perfume_to_cosmetics_rack",
+        "mobile_manip/remote_to_holder",
+        "mobile_manip/salt_to_spice_rack",
+        "mobile_manip/shop",
+        "mobile_manip/soap_to_dish",
+        "mobile_manip/teacup_to_saucer_teapot_to_tray",
+        "mobile_manip/utensils_to_holder",
+        "table_top_manip/collect_coffee_beans",
+        "table_top_manip/flip_cup_collect_cookies",
+        "table_top_manip/frame_against_pen_holder",
+        "table_top_manip/install_gear",
+        "table_top_manip/peg_in_hole",
+        "table_top_manip/put_glass_in_glassbox",
+        "table_top_manip/tighten_nut"
+      ],
+      "handover": [
+        "mobile_manip/detergent",
+        "mobile_manip/fruit",
+        "mobile_manip/shop",
+        "table_top_manip/flip_cup_collect_cookies",
+        "table_top_manip/frame_against_pen_holder"
+      ],
+      "pull": [
+        "mobile_manip/dishwasher",
+        "mobile_manip/microwave"
+      ],
+      "sweep": [
+        "mobile_manip/dishwasher",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/microwave",
+        "mobile_manip/shop",
+        "table_top_manip/collect_coffee_beans"
+      ],
+      "push": [
+        "mobile_manip/dishwasher"
+      ],
+      "pour": [
+        "mobile_manip/fruit",
+        "table_top_manip/flip_cup_collect_cookies"
+      ],
+      "insert": [
+        "mobile_manip/pen",
+        "table_top_manip/collect_coffee_beans",
+        "table_top_manip/peg_in_hole"
+      ],
+      "flip": [
+        "table_top_manip/flip_cup_collect_cookies",
+        "table_top_manip/frame_against_pen_holder"
+      ],
+      "press": [
+        "table_top_manip/put_glass_in_glassbox"
+      ]
+    },
+    "range": {
+      "short-horizon": [
+        "mobile_manip/apple_from_shelf",
+        "mobile_manip/apple_to_fruit_bowl",
+        "mobile_manip/bookmark_on_book",
+        "mobile_manip/bowl_to_plate",
+        "mobile_manip/microwave",
+        "mobile_manip/pen",
+        "mobile_manip/perfume_to_cosmetics_rack",
+        "mobile_manip/remote_to_holder",
+        "mobile_manip/salt_to_spice_rack",
+        "mobile_manip/soap_to_dish",
+        "mobile_manip/teacup_to_saucer_teapot_to_tray",
+        "mobile_manip/utensils_to_holder",
+        "table_top_manip/collect_coffee_beans",
+        "table_top_manip/flip_cup_collect_cookies",
+        "table_top_manip/frame_against_pen_holder",
+        "table_top_manip/install_gear",
+        "table_top_manip/peg_in_hole",
+        "table_top_manip/put_glass_in_glassbox",
+        "table_top_manip/tighten_nut"
+      ],
+      "long-horizon": [
+        "mobile_manip/bottle",
+        "mobile_manip/detergent",
+        "mobile_manip/dish",
+        "mobile_manip/dishwasher",
+        "mobile_manip/fruit",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/shop"
+      ]
+    },
+    "precision": {
+      "low": [
+        "mobile_manip/apple_from_shelf",
+        "mobile_manip/apple_to_fruit_bowl",
+        "mobile_manip/bookmark_on_book",
+        "mobile_manip/bowl_to_plate",
+        "mobile_manip/detergent",
+        "mobile_manip/dishwasher",
+        "mobile_manip/fruit",
+        "mobile_manip/microwave",
+        "mobile_manip/perfume_to_cosmetics_rack",
+        "mobile_manip/remote_to_holder",
+        "mobile_manip/salt_to_spice_rack",
+        "mobile_manip/shop",
+        "mobile_manip/utensils_to_holder",
+        "table_top_manip/frame_against_pen_holder"
+      ],
+      "medium": [
+        "mobile_manip/bottle",
+        "mobile_manip/dish",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/pen",
+        "mobile_manip/soap_to_dish",
+        "mobile_manip/teacup_to_saucer_teapot_to_tray",
+        "table_top_manip/flip_cup_collect_cookies",
+        "table_top_manip/put_glass_in_glassbox"
+      ],
+      "high": [
+        "table_top_manip/collect_coffee_beans",
+        "table_top_manip/install_gear",
+        "table_top_manip/peg_in_hole",
+        "table_top_manip/tighten_nut"
+      ]
+    },
+    "mobility": {
+      "mobile": [
+        "mobile_manip/apple_from_shelf",
+        "mobile_manip/apple_to_fruit_bowl",
+        "mobile_manip/bookmark_on_book",
+        "mobile_manip/bottle",
+        "mobile_manip/bowl_to_plate",
+        "mobile_manip/detergent",
+        "mobile_manip/dish",
+        "mobile_manip/dishwasher",
+        "mobile_manip/fruit",
+        "mobile_manip/make_sandwich",
+        "mobile_manip/microwave",
+        "mobile_manip/pen",
+        "mobile_manip/perfume_to_cosmetics_rack",
+        "mobile_manip/remote_to_holder",
+        "mobile_manip/salt_to_spice_rack",
+        "mobile_manip/shop",
+        "mobile_manip/soap_to_dish",
+        "mobile_manip/teacup_to_saucer_teapot_to_tray",
+        "mobile_manip/utensils_to_holder"
+      ],
+      "fixed": [
+        "table_top_manip/collect_coffee_beans",
+        "table_top_manip/flip_cup_collect_cookies",
+        "table_top_manip/frame_against_pen_holder",
+        "table_top_manip/install_gear",
+        "table_top_manip/peg_in_hole",
+        "table_top_manip/put_glass_in_glassbox",
+        "table_top_manip/tighten_nut"
+      ]
+    }
+  }
+}

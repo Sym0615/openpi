@@ -1,0 +1,15 @@
+concave_hull==0.0.9
+lmdb==1.6.2
+mediapy==1.2.4
+mplib==0.2.1
+open3d==0.19.0
+python-fcl==0.7.0.8
+roboticstoolbox-python==1.1.1
+shapely==2.1.1
+trimesh==4.6.13
+huggingface-hub==0.34.4
+ray==2.48.0
+pydantic==2.12.5
+uvicorn==0.38.0
+pre-commit==4.2.0
+PyTurboJPEG==2.2.0

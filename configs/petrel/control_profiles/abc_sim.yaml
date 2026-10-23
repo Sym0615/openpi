@@ -1,0 +1,83 @@
+schema: openpi_petrel_control_profile_registry_v1
+enabled: true
+
+# ABC-Sim provides named joint/gripper positions. Derive missing EE poses with
+# the ABC-130K YAM grasp-site FK, expressed in each arm's own base frame.
+profile_defaults:
+  control_type: dual_arm
+  mapping:
+    pose_input: xyz_rpy
+    action_pose_semantics: absolute_target
+    missing_policy: pad_and_mask
+    frame_transform:
+      world_from_source: identity
+      source_ee_from_canonical_ee: identity
+    slots:
+      left:
+        joint:
+          state_key: states.left_joint.position
+          action_key: actions.left_joint.position
+          raw_slice: [0, 6]
+          target_slot: left.joint
+        ee:
+          state_key: states.left_joint.position
+          action_key: actions.left_joint.position
+          raw_slice: [0, 6]
+          forward_kinematics: yam
+          target_slot: left.ee
+        gripper:
+          state_key: states.left_gripper.position
+          action_key: actions.left_gripper.position
+          raw_slice: [0, 1]
+          target_slot: left.gripper
+      right:
+        joint:
+          state_key: states.right_joint.position
+          action_key: actions.right_joint.position
+          raw_slice: [0, 6]
+          target_slot: right.joint
+        ee:
+          state_key: states.right_joint.position
+          action_key: actions.right_joint.position
+          raw_slice: [0, 6]
+          forward_kinematics: yam
+          target_slot: right.ee
+        gripper:
+          state_key: states.right_gripper.position
+          action_key: actions.right_gripper.position
+          raw_slice: [0, 1]
+          target_slot: right.gripper
+  fields:
+    state:
+      keys:
+      - states.left_joint.position
+      - states.left_gripper.position
+      - states.right_joint.position
+      - states.right_gripper.position
+    action:
+      keys:
+      - actions.left_joint.position
+      - actions.left_gripper.position
+      - actions.right_joint.position
+      - actions.right_gripper.position
+    language:
+      source: meta/tasks.parquet
+    timestamp:
+      key: timestamp
+    frame_index:
+      key: frame_index
+    task_index:
+      key: task_index
+
+control_profiles:
+  abc_sim_3cam:
+    fields:
+      video:
+        keys:
+        - observation.images.top
+        - observation.images.left
+        - observation.images.right
+        key_map:
+          observation.images.top: base_0_rgb
+          observation.images.left: left_wrist_0_rgb
+          observation.images.right: right_wrist_0_rgb

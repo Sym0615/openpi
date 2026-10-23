@@ -1,0 +1,9 @@
+schema: openpi_petrel_dataset_group_v1
+name: abc_sim_bottles_train
+category: abc_sim_bottles
+profile: abc_sim_3cam
+format: v3
+root: .
+datasets:
+- name: abc_sim_train
+  path: train

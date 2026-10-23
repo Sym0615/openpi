@@ -1,0 +1,704 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+      random_visuals:
+      - prim_path: /World/_scene/obj_table/model_eef587b5c4bcc52eb1400975c3c71e90_0/Looks/_b9766aeb5a3a91c8ed95ec8/Num5e7cded4c3afb9000149674f
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/obj_table/model_eef587b5c4bcc52eb1400975c3c71e90_0/Looks/_f005b1a5b89690001a5e474/Num5e7cded4c3afb9000149674f
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/obj_table/model_eef587b5c4bcc52eb1400975c3c71e90_0/Looks/_f005b1a23bc8400014d4633/Num5e7cded4c3afb9000149674f
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/obj_cup/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_fruit/textures/cup_texture/train/.*\.png$
+      - prim_path: /World/_scene/obj_container/Looks/material0/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_fruit/textures/container_texture/train/.*\.png$
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: manual
+      actions:
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.25
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: apple
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.15
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: apple
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.1
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - 0.707
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.05
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 1
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.13
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - 0.707
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.25
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: orange
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.15
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: orange
+            type: object_frame
+          - name: right
+            translation:
+            - 0.3
+            - 0.1
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - 0.707
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.3299286864575354
+            - 0.625417510030224
+            - -0.625417510030224
+            - 0.32992868645753537
+            grasp: true
+            rel_object_uid: container
+            type: object_frame
+          - name: left
+            translation:
+            - 0.3
+            - -0.05
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 1
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.13
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - 0.707
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.25
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: apple_01
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.15
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - 0.5
+            grasp: false
+            rel_object_uid: apple_01
+            type: object_frame
+          - name: right
+            translation:
+            - 0.3
+            - 0.1
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - 0.707
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.3299286864575354
+            - 0.625417510030224
+            - -0.625417510030224
+            - 0.32992868645753537
+            grasp: true
+            rel_object_uid: container
+            type: object_frame
+          - name: left
+            translation:
+            - 0.3
+            - -0.05
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 1
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - -0.13
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          left:
+          - name: left
+            cnt: 15
+            grasp: true
+            type: pending
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.0
+            - 0.707
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            translation:
+            - 0.2
+            - 0.18
+            - 0.0
+            orientation:
+            - 0.2673
+            - 0.2673
+            - -0.65464
+            - -0.65464
+            grasp: false
+            rel_object_uid: cup
+            type: object_frame
+          - name: right
+            translation:
+            - 0.144852
+            - 0.124954
+            - 0.0
+            orientation:
+            - 0.2673
+            - 0.2673
+            - -0.65464
+            - -0.65464
+            grasp: false
+            rel_object_uid: cup
+            type: object_frame
+          - name: right
+            translation:
+            - 0.2
+            - 0.0
+            - 0.3
+            orientation:
+            - 0.927
+            - 0.0
+            - 0.375
+            - 0.0
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+          - name: left
+            translation:
+            - 0.0
+            - 0.35
+            - 0.0
+            orientation:
+            - -0.3299286864575354
+            - 0.625417510030224
+            - -0.625417510030224
+            - 0.32992868645753537
+            grasp: true
+            rel_object_uid: container
+            type: object_frame
+          - name: left
+            cnt: 50
+            grasp: false
+            rel_arm: left
+            type: reset
+      - type: move_to
+        move_type: alignv2
+        arm: right
+        grasp: true
+        rel_object_uid: container
+        delta_position:
+          x: null
+          y: -0.1
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.2
+            - 0.17
+            - 0.2
+            orientation:
+            - 0.803
+            - -0.464
+            - 0.325
+            - -0.187
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+      robot: 0
+    articulation: []
+    goal:
+    - - obj1_uid:
+        - apple
+        obj2_uid:
+        - container
+        position:
+        - in
+      - obj1_uid:
+        - apple_01
+        obj2_uid:
+        - container
+        position:
+        - in
+      - obj1_uid:
+        - orange
+        obj2_uid:
+        - container
+        position:
+        - in
+      - type: manip/default/sr_based_genmanip_axis_align
+        obj1_uid: cup
+        obj2_uid: container
+        obj1_axis: y
+        obj2_axis: y
+        comparison: '>='
+        threshold_deg: 40.0
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: cup
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.04
+        - 0.14
+        y_range:
+        - -0.08
+        - 0.05
+        z_range:
+        - 0.1
+        - 0.3
+        x_rel_object_uid: container
+        y_rel_object_uid: container
+        z_rel_object_uid: container
+    mode: manual
+    planner: curobo
+  instruction: Make a fruit milkshake in the cup.
+  layout_config:
+    ignored_objects: []
+    type: random_custom_tableset
+    custom_tableset:
+    - apple:
+        position:
+        - 0.3235375991776994
+        - -0.3779458237115165
+        - 0.7731800000000116
+        orientation:
+        - 1.0
+        - 0.0
+        - 0.0
+        - 0.0
+        reset_orientation: true
+        additional_height: 0.01
+        w: 0.15
+        h: 0.15
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+        buffer_size: 0.05
+      apple_01:
+        position:
+        - 0.2501280760185715
+        - -0.3223858519852123
+        - 0.7731800000000238
+        orientation:
+        - 1.0
+        - 0.0
+        - 0.0
+        - 0.0
+        reset_orientation: true
+        additional_height: 0.01
+        w: 0.15
+        h: 0.15
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+        buffer_size: 0.05
+      orange:
+        position:
+        - 0.3383013789714093
+        - -0.2817084095222748
+        - 0.7724200000000019
+        orientation:
+        - 1.0
+        - 0.0
+        - 0.0
+        - 0.0
+        reset_orientation: true
+        additional_height: 0.01
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+        buffer_size: 0.05
+      container:
+        w: 0.15
+        h: 0.15
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+      cup:
+        w: 0.15
+        h: 0.15
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+        buffer_size: 0.05
+      mango:
+        w: 0.15
+        h: 0.15
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+  mode: manual
+  num_episode: 250
+  object_config:
+    mango:
+      type: existed_object
+      uid_list:
+      - mango
+      is_not_rigid: true
+      without_colliders: true
+    apple:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_fruit/apple/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 0.9
+      mass: 0.1
+      option:
+      - plain_replace
+    orange:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_fruit/apple/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 0.9
+      mass: 0.1
+      option:
+      - plain_replace
+    apple_01:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_fruit/apple/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 0.9
+      mass: 0.1
+      option:
+      - plain_replace
+    container:
+      type: existed_object
+      uid_list:
+      - container
+      is_not_rigid: true
+      without_colliders: true
+    cup:
+      type: existed_object
+      uid_list:
+      - cup
+      is_not_rigid: true
+      without_colliders: true
+  preprocess_config: []
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 0.15
+    - -0.8
+    - 0.2
+    orientation:
+    - 0.70711
+    - 0.0
+    - 0.0
+    - 0.70711
+  table_uid: table
+  task_name: ebench/mobile_manip/fruit
+  usd_name: scene_usds/ebench/long_horizon/scene_fruit/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+evaluation_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+  num_test: 12
+  num_steps: 3000
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 0.15
+    - -0.8
+    - 0.2
+    orientation:
+    - 0.70711
+    - 0.0
+    - 0.0
+    - 0.70711
+  table_uid: table
+  task_name: ebench/mobile_manip/fruit_val_unseen_20p
+  usd_name: scene_usds/ebench/long_horizon/scene_fruit/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

@@ -1,0 +1,1547 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+      random_visuals:
+      - prim_path: /World/_scene/obj_table/model_9938e4a048e8362cb22105425b506d4a_0/Looks/_512fb5f7ae59d0001df77ef/Num613e3bde3e8f6d0001279e90
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/obj_table/model_9938e4a048e8362cb22105425b506d4a_0/Looks/_512fb5f80db560001884c36/Num613e3bde3e8f6d0001279e90
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: manual
+      actions:
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle1
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle1
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle1
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.25
+            - 0.003
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle2
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle2
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle2
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle2
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.3
+          y: 0.06
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.06
+            - 0.25
+            - 0.003
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle3
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle3
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle3
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle3
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.3
+          y: 0.13
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.13
+            - 0.25
+            - 0.003
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle10
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle10
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle10
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle10
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.23
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.25
+            - 0.065
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle9
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle9
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle9
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle9
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.17
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.25
+            - 0.125
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle11
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle11
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle11
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle11
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.23
+          y: 0.06
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.06
+            - 0.25
+            - 0.065
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle8
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle8
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle8
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle8
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.17
+          y: 0.06
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.06
+            - 0.25
+            - 0.125
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle12
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle12
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle12
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle12
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.24
+          y: 0.13
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.13
+            - 0.25
+            - 0.06
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle7
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle7
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle7
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle7
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.175
+          y: 0.13
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.13
+            - 0.25
+            - 0.125
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle4
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle4
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle4
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle4
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.3
+          y: 0.185
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.185
+            - 0.25
+            - 0.003
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle5
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle5
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle5
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle5
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.24
+          y: 0.185
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.185
+            - 0.25
+            - 0.06
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: bottle6
+        arm: right
+        delta_position:
+          x: -0.3
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.2
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle6
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.15
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: false
+            rel_object_uid: bottle6
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.0
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: bottle6
+            type: object_frame
+      - type: move_to
+        move_type: alignv2
+        rel_object_uid: basket
+        arm: right
+        grasp: true
+        delta_position:
+          x: -0.175
+          y: 0.185
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.185
+            - 0.25
+            - 0.125
+            orientation:
+            - -0.7071067811865477
+            - 0.0
+            - 0.0
+            - 0.7071067811865475
+            grasp: true
+            rel_object_uid: basket
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: false
+            type: pending
+      robot: 0
+    articulation: []
+    goal:
+    - - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle1
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle2
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle3
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle4
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle5
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle6
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle7
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle8
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle9
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle10
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle11
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+      - type: manip/default/sr_based_genmanip_range
+        obj1_uid: bottle12
+        x_type: relative
+        y_type: relative
+        z_type: relative
+        x_range:
+        - -0.14
+        - 0.03
+        y_range:
+        - -0.21
+        - 0.04
+        z_range:
+        - -0.05
+        - 0.05
+        x_rel_object_uid: basket
+        y_rel_object_uid: basket
+        z_rel_object_uid: basket
+    mode: manual
+    planner: curobo
+  instruction: Sort all the bottles into the basket.
+  layout_config:
+    ignored_objects: []
+    type: random_custom_tableset
+    custom_tableset:
+    - bottle1:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle2:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle3:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle4:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle5:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle6:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle7:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle8:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle9:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle10:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle11:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+      bottle12:
+        random_range_x: 0.25
+        random_range_y: -0.05
+        random_range_w: 0.2
+        random_range_h: 0.6
+        random_range_angle: 0.0
+        buffer_size: 0.05
+        reset_orientation: true
+        orientation:
+        - 0.5
+        - 0.5
+        - -0.5
+        - -0.5
+        type: global_range
+  mode: manual
+  num_episode: 250
+  object_config:
+    basket:
+      type: existed_object
+      uid_list:
+      - '05'
+      is_not_rigid: true
+      without_colliders: true
+    bottle1:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle2:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle3:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle4:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle5:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle6:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle7:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle8:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle9:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      option:
+      - plain_replace
+    bottle10:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle11:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+    bottle12:
+      type: load_object_from_path
+      path: re:scene_usds/ebench/long_horizon/scene_bottle/bottle/train/.*/.*\.usd
+      max_cached_num: 1000
+      relative_scale: 1.0
+      mass: 0.1
+      option:
+      - plain_replace
+  preprocess_config: []
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 0.75
+    - 0.3
+    - -0.65
+    orientation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - -1.0
+  table_uid: table
+  task_name: ebench/mobile_manip/bottle
+  usd_name: scene_usds/ebench/long_horizon/scene_bottle/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+evaluation_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+  num_test: 60
+  num_steps: 3000
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 0.9
+    - 0.3
+    - -0.65
+    orientation:
+    - 0.0
+    - 0.0
+    - 0.0
+    - -1.0
+  table_uid: table
+  task_name: ebench/mobile_manip/bottle
+  usd_name: scene_usds/ebench/long_horizon/scene_bottle/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

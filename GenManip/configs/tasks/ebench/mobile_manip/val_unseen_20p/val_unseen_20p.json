@@ -1,0 +1,21 @@
+[
+    "ebench/mobile_manip/val_unseen_20p/utensils_to_holder.yml",
+    "ebench/mobile_manip/val_unseen_20p/bookmark_on_book.yml",
+    "ebench/mobile_manip/val_unseen_20p/soap_to_dish.yml",
+    "ebench/mobile_manip/val_unseen_20p/apple_to_fruit_bowl.yml",
+    "ebench/mobile_manip/val_unseen_20p/remote_to_holder.yml",
+    "ebench/mobile_manip/val_unseen_20p/perfume_to_cosmetics_rack.yml",
+    "ebench/mobile_manip/val_unseen_20p/salt_to_spice_rack.yml",
+    "ebench/mobile_manip/val_unseen_20p/apple_from_shelf.yml",
+    "ebench/mobile_manip/val_unseen_20p/teacup_to_saucer_teapot_to_tray.yml",
+    "ebench/mobile_manip/val_unseen_20p/bowl_to_plate.yml",
+    "ebench/mobile_manip/val_unseen_20p/bottle.yml",
+    "ebench/mobile_manip/val_unseen_20p/detergent.yml",
+    "ebench/mobile_manip/val_unseen_20p/dish.yml",
+    "ebench/mobile_manip/val_unseen_20p/dishwasher.yml",
+    "ebench/mobile_manip/val_unseen_20p/fruit.yml",
+    "ebench/mobile_manip/val_unseen_20p/make_sandwich.yml",
+    "ebench/mobile_manip/val_unseen_20p/microwave.yml",
+    "ebench/mobile_manip/val_unseen_20p/pen.yml",
+    "ebench/mobile_manip/val_unseen_20p/shop.yml"
+]

@@ -1,0 +1,464 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+      random_visuals:
+      - prim_path: /World/_base/room/Meshes/BaseAnimation/cabinet/model_e40da5dc3ce0234ecde394b21499832d_0/Looks/_fbcef6875c9820001b25451_index364253/Num5fb1f06b0e82a50001240a5d
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_base/room/Meshes/BaseAnimation/cabinet/model_e40da5dc3ce0234ecde394b21499832d_0/Looks/_b90acbe9e796322b2fc30e9_index354635/Num5fb1f06b0e82a50001240a5d
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_base/room/Meshes/Animation/oven/model_1fad4c29fd7e39a900cba109722188cc_0/Instance/Materials/MI_657826524a62b000011d2f13/Shader
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: manual
+      actions:
+      - type: move_to
+        move_type: delta
+        delta_position:
+          x: 0.3
+          y: 0.0
+          yaw: 0.0
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_object_uid: bread2
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.1
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_object_uid: bread2
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_object_uid: bread2
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - 0.08
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_object_uid: plate
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.3
+            - -0.03
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_object_uid: plate
+            type: object_frame
+          left:
+          - name: left
+            translation:
+            - -0.3
+            - 0.0
+            - -0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: beef
+            type: object_frame
+          - name: left
+            translation:
+            - -0.2
+            - 0.0
+            - -0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_object_uid: beef
+            type: object_frame
+          - name: left
+            translation:
+            - -0.3
+            - 0.0
+            - -0.05
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: true
+            rel_object_uid: beef
+            type: object_frame
+          - name: left
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_arm: left
+            type: robot_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.18550121495586275
+            - -0.005234530748983123
+            - 0.24096036798141052
+            orientation:
+            - 0.36604643
+            - 0.00811755
+            - 0.93055569
+            - 0.00319611
+            grasp: false
+            rel_object_uid: lettuce
+            type: object_frame
+          - name: right
+            translation:
+            - 0.1123123920768237
+            - -0.0034897790585515726
+            - 0.17284023845188462
+            orientation:
+            - 0.36604643
+            - 0.00811755
+            - 0.93055569
+            - 0.00319611
+            grasp: false
+            rel_object_uid: lettuce
+            type: object_frame
+          - name: right
+            translation:
+            - 0.18550121495586275
+            - -0.005234530748983123
+            - 0.24096036798141052
+            orientation:
+            - 0.36604643
+            - 0.00811755
+            - 0.93055569
+            - 0.00319611
+            grasp: true
+            rel_object_uid: lettuce
+            type: object_frame
+          left:
+          - name: left
+            translation:
+            - -0.015
+            - 0.32
+            - -0.08
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_object_uid: plate
+            type: object_frame
+          - name: left
+            translation:
+            - -0.015
+            - 0.33
+            - 0.03
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_object_uid: plate
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - -0.015
+            - 0.38
+            - 0.05
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_object_uid: plate
+            type: object_frame
+          - name: right
+            translation:
+            - -0.015
+            - 0.38
+            - -0.08
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_object_uid: plate
+            type: object_frame
+          left:
+          - name: left
+            translation:
+            - 0.0
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_object_uid: bread4
+            type: object_frame
+          - name: left
+            translation:
+            - 0.0
+            - 0.0
+            - 0.1
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_object_uid: bread4
+            type: object_frame
+          - name: left
+            translation:
+            - 0.0
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_object_uid: bread4
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.2
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: true
+            rel_arm: right
+            type: robot_frame
+          left:
+          - name: left
+            translation:
+            - 0.0
+            - 0.38
+            - -0.1
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: true
+            rel_object_uid: plate
+            type: object_frame
+          - name: left
+            translation:
+            - 0.0
+            - 0.38
+            - 0.05
+            orientation:
+            - 0.5
+            - -0.5
+            - 0.5
+            - -0.5
+            grasp: false
+            rel_object_uid: plate
+            type: object_frame
+      robot: 0
+    articulation: []
+    reset_tcp: 0.2
+    goal:
+    - - obj1_uid:
+        - bread2
+        obj2_uid:
+        - plate
+        position:
+        - top
+      - obj1_uid:
+        - beef
+        obj2_uid:
+        - bread2
+        position:
+        - top
+      - obj1_uid:
+        - lettuce
+        obj2_uid:
+        - beef
+        position:
+        - top
+      - obj1_uid:
+        - bread4
+        obj2_uid:
+        - lettuce
+        position:
+        - top
+    mode: manual
+    planner: curobo
+  instruction: Make a sandwich in the plate.
+  layout_config:
+    ignored_objects: []
+    type: random_custom_tableset
+    custom_tableset:
+    - plate:
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+      bread2:
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+      lettuce:
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+      bread4:
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+      beef:
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+  mode: manual
+  num_episode: 250
+  object_config:
+    beef:
+      type: existed_object
+      uid_list:
+      - beef
+      is_not_rigid: true
+      without_colliders: true
+    plate:
+      type: existed_object
+      uid_list:
+      - plate
+      is_not_rigid: true
+      without_colliders: true
+    bread2:
+      type: existed_object
+      uid_list:
+      - bread2
+      is_not_rigid: true
+      without_colliders: true
+    lettuce:
+      type: existed_object
+      uid_list:
+      - lettuce
+      is_not_rigid: true
+      without_colliders: true
+    bread4:
+      type: existed_object
+      uid_list:
+      - bread4
+      is_not_rigid: true
+      without_colliders: true
+  preprocess_config: []
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - -0.75
+    - 0.0
+    - 0.5
+  table_uid: instance
+  task_name: ebench/mobile_manip/make_sandwich
+  usd_name: scene_usds/ebench/long_horizon/scene_sandwich/base
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+evaluation_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+  num_test: 45
+  num_steps: 3000
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - -0.75
+    - 0.0
+    - 0.5
+  table_uid: instance
+  task_name: ebench/mobile_manip/make_sandwich
+  usd_name: scene_usds/ebench/long_horizon/scene_sandwich/base
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

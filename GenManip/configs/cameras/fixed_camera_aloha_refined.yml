@@ -1,0 +1,99 @@
+camera1:
+  clipping_range_max: 10000.0
+  clipping_range_min: 0.001
+  exists: false
+  focal_length: 5.0
+  frequency: 60
+  horizontal_aperture: 10.0
+  name: camera1
+  orientation:
+  - -0.0071865058262247095
+  - -0.5792785229595211
+  - -0.005107428795172445
+  - 0.815081996576386
+  position:
+  - 0.28070902824401855
+  - -0.02326910011470318
+  - 1.6857764720916748
+  prim_path: /camera1
+  resolution:
+  - 1280
+  - 720
+  vertical_aperture: 5.625
+  with_distance: true
+  with_semantic: true
+  with_bbox2d: true
+  with_bbox3d: true
+  with_motion_vector: true
+left_camera:
+  clipping_range_max: 10000.0
+  clipping_range_min: 0.01
+  exists: true
+  focal_length: 3.0
+  frequency: 60
+  horizontal_aperture: 6.4
+  name: left_camera
+  prim_path: /aloha_split/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fl/link6/Camera
+  translation:
+  - 0.0
+  - 0.075
+  - 0.05
+  orientation:
+  - 0.0
+  - 0.0
+  - -0.9763
+  - -0.21644
+  resolution:
+  - 640
+  - 480
+  vertical_aperture: 4.8
+  with_distance: true
+  with_semantic: true
+  with_bbox2d: true
+  with_bbox3d: true
+  with_motion_vector: true
+right_camera:
+  clipping_range_max: 10000.0
+  clipping_range_min: 0.01
+  exists: true
+  focal_length: 3.0
+  frequency: 60
+  horizontal_aperture: 6.4
+  name: right_camera
+  prim_path: /aloha_split/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/fr/link6/Camera
+  translation:
+  - 0.0
+  - 0.075
+  - 0.05
+  orientation:
+  - 0.0
+  - 0.0
+  - -0.9763
+  - -0.21644
+  resolution:
+  - 640
+  - 480
+  vertical_aperture: 4.8
+  with_distance: true
+  with_semantic: true
+  with_bbox2d: true
+  with_bbox3d: true
+  with_motion_vector: true
+top_camera:
+  clipping_range_max: 10000.0
+  clipping_range_min: 0.01
+  exists: true
+  focal_length: 3.0
+  frequency: 60
+  horizontal_aperture: 8.4
+  name: top_camera
+  prim_path: /aloha_split/split_aloha_mid_360_with_piper/split_aloha_mid_360_with_piper/top_camera_link/Camera
+  resolution:
+  - 640
+  - 480
+  vertical_aperture: 4.8
+  with_distance: true
+  with_semantic: true
+  with_bbox2d: true
+  with_bbox3d: true
+  with_motion_vector: true

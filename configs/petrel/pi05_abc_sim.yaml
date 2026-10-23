@@ -1,0 +1,88 @@
+schema: openpi_petrel_v1
+dataset_id: abc_sim
+
+openpi:
+  state_dim: 32
+  action_dim: 32
+  action_horizon: 30
+  images:
+    size: [224, 224]
+    dtype: uint8
+    channels: rgb
+    slots: [base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb]
+  normalization: quantile
+  control_projection: mapped
+
+storage:
+  local_root: /dataset/public/sim/abc-sim
+  parquet_cache_size: 8
+  direct_parquet_row_group_read: true
+  metadata_cache: data/petrel_cache/meta/{dataset_id}/{remote}
+  path_index_cache: data/petrel_cache/path_index/{dataset_id}/{remote}
+  frame_filter_cache: data/petrel_cache/filter/{dataset_id}/{remote}
+
+frame_filter:
+  # All train tasks; ABC130K trim/quality filtering, without FK consistency.
+  enabled: true
+  required: true
+  strict_episode_coverage: true
+  filename: frame_filter.jsonl
+  window_policy: full_chunk
+
+norm_stats:
+  dataset_group_template: dataset/{dataset_id}
+
+sampling:
+  state_frames: 1
+  action_horizon: 30
+  stride: 1
+  allow_end_padding: false
+  training_block_size: 1
+  training_frame_stride: 1
+
+mixture:
+  seed: 42
+  balance_by_dataset: false
+  balance_by_trajectory: true
+  distribute_category_weight_by_valid_windows: true
+  category_weights:
+    abc_sim: 1.0
+
+control_profile_files:
+- control_profiles/abc_sim.yaml
+
+dataset_files:
+  directory: dataset_groups/abc_sim
+  recursive: false
+  pattern: '*.yaml'
+
+source_control_space:
+  name: openpi
+  dim: 32
+  slots:
+    left:
+      joint:
+        indices: [0, 1, 2, 3, 4, 5, 26]
+      gripper:
+        indices: [6]
+      ee:
+        indices: [14, 15, 16, 17, 18, 19]
+    right:
+      joint:
+        indices: [7, 8, 9, 10, 11, 12, 27]
+      gripper:
+        indices: [13]
+      ee:
+        indices: [20, 21, 22, 23, 24, 25]
+    reserved:
+      pad:
+        indices: [28, 29, 30, 31]
+  missing_policy: pad_and_mask
+  pose:
+    state: xyz_rpy
+    action: delta_xyz_rpy
+  action_semantics:
+    joint: delta
+    gripper: absolute
+    ee: delta
+  camera_frame_delta: false

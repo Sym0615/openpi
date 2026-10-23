@@ -44,6 +44,7 @@ import pyarrow.parquet as pq
 import torch
 
 from openpi.training import profiling as _training_profiling
+from openpi.training import yam_fk as _yam_fk
 
 
 DEFAULT_PROMPT = "A video recorded from a robot's point of view executing the following instruction: {task}"
@@ -2679,7 +2680,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
         pose_input = self._canonical_pose_input(component, kind)
         direct = self._canonical_component_tensor(parquet, component, indices, kind)
         if direct is not None:
-            xyz, rotation = _pose_to_xyz_matrix(direct, pose_input)
+            xyz, rotation = (
+                _yam_fk.forward_kinematics(direct)
+                if component.get("forward_kinematics") == "yam"
+                else _pose_to_xyz_matrix(direct, pose_input)
+            )
             return self._canonical_transform_pose_matrix(xyz, rotation, component, kind, pose_input, is_delta=False)
 
         pos_key = component.get(f"{kind}_position_key") or component.get("position_key")
@@ -2799,7 +2804,11 @@ class PetrelLeRobotDataset(torch.utils.data.Dataset):
 
         direct = self._canonical_component_tensor(parquet, component, selected_indices, kind)
         if direct is not None:
-            xyz, rotation = _pose_to_xyz_matrix(direct, pose_input)
+            xyz, rotation = (
+                _yam_fk.forward_kinematics(direct)
+                if component.get("forward_kinematics") == "yam"
+                else _pose_to_xyz_matrix(direct, pose_input)
+            )
             xyz, rotation = self._canonical_transform_pose_matrix(xyz, rotation, component, kind, pose_input)
             return _format_xyz_matrix_pose(xyz, rotation, _pose_output_format(kind, self.canonical_adapter, component))
 
@@ -3952,6 +3961,15 @@ def _resolve_control_adapter(
         for component_name, component in side.items():
             if component_name == "pad" or not isinstance(component, dict) or component.get("pad") is True:
                 continue
+            fk_model = component.get("forward_kinematics")
+            if fk_model is not None:
+                if fk_model != "yam" or component_name != "ee":
+                    raise ValueError("forward_kinematics supports only 'yam' on EE components.")
+                if str(component.get("action_semantics", "absolute")) != "absolute":
+                    raise ValueError("YAM FK requires absolute source joint angles.")
+                for kind in ("state", "action"):
+                    if not component.get(f"{kind}_key") or _raw_component_width(component, kind, 6) != 6:
+                        raise ValueError(f"YAM FK requires {kind}_key with six joint angles.")
             target_slot = component.get("target_slot")
             if not isinstance(target_slot, str) or not target_slot:
                 raise ValueError(f"Control profile {profile_name!r} {side_name}.{component_name} requires target_slot.")

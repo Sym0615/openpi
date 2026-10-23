@@ -1,0 +1,554 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+      random_visuals:
+      - prim_path: /World/_scene/room/Meshes/BaseAnimation/cabinet/model_17fc64919a2c0aa03fa27c37b59b182e_0/Looks/_e94205b7fdaa4000170a2a5_index116805/Num5dd77cea7d6a630001bffad3
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/room/Meshes/BaseAnimation/cabinet/model_17fc64919a2c0aa03fa27c37b59b182e_0/Looks/_8f0823037b50e731fd5e7da_index126412/Num5dd77cea7d6a630001bffad3
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/room/DomeLight
+        type: dome_light
+        assets_pattern: scene_usds/ebench/long_horizon/scene_dishwasher/dome_light/train/.*\.exr$
+      - prim_path: /World/_scene/obj_bowl1/Looks/colonoware_u1_v1/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_dishwasher/textures/bowl1_texture/train/.*\.png$
+      - prim_path: /World/_scene/obj_bowl2/Looks/M_Blue_and_white_porcelain_bowl/baseColorTex
+        type: texture
+        assets_pattern: scene_usds/ebench/long_horizon/scene_dishwasher/textures/bowl2_texture/train/.*\.png$
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: manual
+      actions:
+      - type: move_to
+        move_type: delta
+        delta_position:
+          x: 0.1
+          y: -0.35
+          yaw: 0.0
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - -0.08835403533593156
+            - 0.23985676054312388
+            - -0.010645842737982185
+            orientation:
+            - 0.6610038485672105
+            - -0.583587058146975
+            - 0.35343510464622546
+            - -0.31238387369774273
+            grasp: true
+            rel_object_uid: bowl2
+            type: object_frame
+          - name: left
+            translation:
+            - -0.08203650051706557
+            - 0.1263079016964893
+            - -0.010645842737982185
+            orientation:
+            - 0.6234890213024483
+            - -0.6234854334601111
+            - 0.3335587499248239
+            - -0.33356545823415396
+            grasp: false
+            rel_object_uid: bowl2
+            type: object_frame
+          - name: left
+            grasp: true
+            cnt: 15
+            type: pending
+          - name: left
+            translation:
+            - -0.08835403533593156
+            - 0.23985676054312388
+            - -0.010645842737982185
+            orientation:
+            - 0.6610038485672105
+            - -0.583587058146975
+            - 0.35343510464622546
+            - -0.31238387369774273
+            grasp: true
+            rel_object_uid: bowl2
+            type: object_frame
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: -0.2
+          y: 0.0
+          yaw: 0.0
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: true
+            cnt: 1
+            type: pending
+          right:
+          - name: right
+            translation:
+            - 0.1603482550326944
+            - -0.3674738401318558
+            - 0.5652662551562398
+            orientation:
+            - 0.5552226439255731
+            - -0.4378673605310887
+            - 0.4378673494019579
+            - 0.5552226351487641
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.1603482601243187
+            - -0.2797438093797442
+            - 0.3112495576386195
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.1603482601243187
+            - -0.37598168817918265
+            - 0.3112495577582255
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.16034825657792606
+            - -0.37598168799712983
+            - 0.4881759917982951
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.16034825657792606
+            - -0.2797438093797442
+            - 0.4881759917982951
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.16034825657792606
+            - -0.2797438093797442
+            - 0.3112495576386195
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.1603482601243187
+            - -0.42598168817918264
+            - 0.3112495577582255
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: -0.2
+          y: 0.0
+          yaw: 0.0
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: 0.0
+          y: 0.2
+          yaw: 0.0
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - -0.109721607721318
+            - -0.3073751922976562
+            - 0.33485328962850847
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: left
+            grasp: false
+            cnt: 15
+            type: pending
+          - name: left
+            grasp: true
+            cnt: 50
+            type: reset
+          right:
+          - name: right
+            grasp: true
+            cnt: 50
+            type: reset
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: 0.0
+          y: -0.5
+          yaw: 0.0
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: 0.45
+          y: 0.0
+          yaw: 0.0
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - -0.08835403533593156
+            - 0.23985676054312388
+            - -0.010645842737982185
+            orientation:
+            - 0.6610038485672105
+            - -0.583587058146975
+            - 0.35343510464622546
+            - -0.31238387369774273
+            grasp: true
+            rel_object_uid: bowl1
+            type: object_frame
+          - name: left
+            translation:
+            - -0.08203650051706557
+            - 0.1263079016964893
+            - -0.010645842737982185
+            orientation:
+            - 0.6234890213024483
+            - -0.6234854334601111
+            - 0.3335587499248239
+            - -0.33356545823415396
+            grasp: false
+            rel_object_uid: bowl1
+            type: object_frame
+          - name: left
+            grasp: true
+            cnt: 15
+            type: pending
+          - name: left
+            translation:
+            - -0.08835403533593156
+            - 0.23985676054312388
+            - -0.010645842737982185
+            orientation:
+            - 0.6610038485672105
+            - -0.583587058146975
+            - 0.35343510464622546
+            - -0.31238387369774273
+            grasp: true
+            rel_object_uid: bowl1
+            type: object_frame
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: -0.45
+          y: 0.0
+          yaw: 0.0
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: 0.0
+          y: 0.5
+          yaw: 0.0
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            translation:
+            - -0.109721607721318
+            - -0.3073751922976562
+            - 0.33485328962850847
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: left
+            grasp: false
+            cnt: 15
+            type: pending
+          - name: left
+            grasp: false
+            cnt: 50
+            type: reset
+      - type: custom_motion
+        motion_list:
+          left:
+          - name: left
+            grasp: true
+            cnt: 1
+            type: pending
+          right:
+          - name: right
+            translation:
+            - 0.17144962441437384
+            - -0.6538841720782722
+            - 0.3511289995279926
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.17144962685651277
+            - -0.6538841722036388
+            - 0.22929281407267033
+            orientation:
+            - 0.5552226439255731
+            - -0.43786736053108877
+            - 0.43786734940195793
+            - 0.5552226351487642
+            grasp: true
+            rel_object_uid: washmachine
+            type: object_frame
+          - name: right
+            translation:
+            - 0.1714496253333324
+            - -0.5687643286424755
+            - 0.3052829544231639
+            orientation:
+            - 0.6779319330100687
+            - -0.20101815755898952
+            - 0.20101814397021878
+            - 0.6779319289807711
+            grasp: true
+            cnt: 200
+            rel_object_uid: washmachine
+            type: object_frame
+      - type: move_to
+        move_type: delta
+        arm: left
+        grasp: true
+        delta_position:
+          x: 0.25
+          y: 0.0
+          yaw: 0.0
+      robot: 0
+    articulation: []
+    goal:
+    - - - obj1_uid: washmachine
+          status:
+          - - - - 0.12
+                - 0.2
+              - - 0.5
+                - 0.8
+              - - -1e8
+                - 1e8
+    - - - obj1_uid: washmachine
+          status:
+          - - - - -0.05
+                - 0.05
+              - - -0.05
+                - 0.05
+              - - -1e8
+                - 1e8
+          succ_cnts: 40
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: bowl1
+          x_type: relative
+          y_type: relative
+          z_type: relative
+          x_range:
+          - -0.2
+          - 0.23
+          y_range:
+          - -0.3
+          - 0.27
+          z_range:
+          - -0.2
+          - 0.25
+          x_rel_object_uid: washmachine
+          y_rel_object_uid: washmachine
+          z_rel_object_uid: washmachine
+          succ_cnts: 40
+          skip_steps: 5
+        - type: manip/default/sr_based_genmanip_range
+          obj1_uid: bowl2
+          x_type: relative
+          y_type: relative
+          z_type: relative
+          x_range:
+          - -0.2
+          - 0.23
+          y_range:
+          - -0.3
+          - 0.27
+          z_range:
+          - -0.2
+          - 0.25
+          x_rel_object_uid: washmachine
+          y_rel_object_uid: washmachine
+          z_rel_object_uid: washmachine
+          succ_cnts: 40
+          skip_steps: 5
+    mode: manual
+    planner: curobo
+  instruction: Put all the bowls into the dishwasher.
+  layout_config:
+    ignored_objects: []
+    type: random_custom_tableset
+    custom_tableset:
+    - bowl1:
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+      bowl2:
+        w: 0.1
+        h: 0.1
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+  mode: manual
+  num_episode: 250
+  object_config:
+    bowl1:
+      type: existed_object
+      uid_list:
+      - bowl1
+      is_not_rigid: true
+      without_colliders: true
+    bowl2:
+      type: existed_object
+      uid_list:
+      - bowl2
+      is_not_rigid: true
+      without_colliders: true
+    washmachine:
+      type: existed_object
+      uid_list:
+      - washmachine
+      is_articulated: true
+      articulation_info:
+        is_articulated: true
+        part:
+          group_0: /Instance/Group_160
+          group_1: /Instance/Group_140
+          group_2: /Instance/Group_220
+          group_3: /Instance/Group_00
+  preprocess_config: []
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 1.0
+    - -0.45
+    - 0.05
+    orientation:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  table_uid: table
+  task_name: ebench/mobile_manip/dishwasher_test_mini
+  usd_name: scene_usds/ebench/long_horizon/scene_dishwasher/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+evaluation_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+  num_test: 20
+  num_steps: 3000
+  object_config:
+    washmachine:
+      type: existed_object
+      uid_list:
+      - washmachine
+      is_articulated: true
+      articulation_info:
+        is_articulated: true
+        part:
+          group_0: /Instance/Group_160
+          group_1: /Instance/Group_140
+          group_2: /Instance/Group_220
+          group_3: /Instance/Group_00
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 1.0
+    - -0.45
+    - 0.15
+    orientation:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+  table_uid: table
+  task_name: ebench/mobile_manip/dishwasher_test_mini
+  usd_name: scene_usds/ebench/long_horizon/scene_dishwasher/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

@@ -1,0 +1,132 @@
+- idx: 0
+  name: tcp0
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85
+  position:
+  - 0.0
+  - 0.0
+  - 0.0
+- idx: 1
+  name: tcp1
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/left_inner_finger_pad
+  position:
+  - -1.826732151480158e-18
+  - -0.0006632553307063943
+  - 0.019224999999999992
+- idx: 2
+  name: tcp2
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/left_inner_finger_pad
+  position:
+  - 0.010999999999999998
+  - -0.0006640053307063951
+  - -0.0012749999999999984
+- idx: 3
+  name: tcp3
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/left_inner_finger_pad
+  position:
+  - -0.011000000000000001
+  - -0.0006640053307063951
+  - -0.0012749999999999984
+- idx: 4
+  name: tcp4
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/left_inner_finger_pad
+  position:
+  - -1.520478603183384e-18
+  - -0.0031640053307063973
+  - -0.0012749999999999984
+- idx: 5
+  name: tcp5
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/left_inner_finger
+  position:
+  - -9.344310000000314e-05
+  - -0.011902500000000003
+  - 0.029499999999999985
+- idx: 6
+  name: tcp6
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/right_inner_finger_pad
+  position:
+  - -1.826732151480158e-18
+  - -0.0006632553307063943
+  - 0.019224999999999992
+- idx: 7
+  name: tcp7
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/right_inner_finger_pad
+  position:
+  - 0.010999999999999998
+  - -0.0006640053307063951
+  - -0.0012749999999999984
+- idx: 8
+  name: tcp8
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/right_inner_finger_pad
+  position:
+  - -0.011000000000000001
+  - -0.0006640053307063951
+  - -0.0012749999999999984
+- idx: 9
+  name: tcp9
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/right_inner_finger_pad
+  position:
+  - -1.520478603183384e-18
+  - -0.0031640053307063973
+  - -0.0012749999999999984
+- idx: 10
+  name: tcp10
+  orientation:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  parent_prim_path: Robotiq_2F_85/right_inner_finger
+  position:
+  - -9.344310000000314e-05
+  - -0.011902500000000003
+  - 0.029499999999999985

@@ -1,0 +1,56 @@
+schema: openpi_petrel_control_profile_registry_v1
+enabled: true
+
+profile_defaults:
+  control_type: dual_arm
+  mapping:
+    missing_policy: pad_and_mask
+    slots:
+      left:
+        joint:
+          state_key: observation.state
+          action_key: action
+          raw_slice: [0, 6]
+          target_slot: left.joint
+        gripper:
+          state_key: observation.state
+          action_key: action
+          raw_slice: [6, 7]
+          target_slot: left.gripper
+      right:
+        joint:
+          state_key: observation.state
+          action_key: action
+          raw_slice: [7, 13]
+          target_slot: right.joint
+        gripper:
+          state_key: observation.state
+          action_key: action
+          raw_slice: [13, 14]
+          target_slot: right.gripper
+  fields:
+    state:
+      keys: [observation.state]
+    action:
+      keys: [action]
+    language:
+      source: meta/tasks.parquet
+    timestamp:
+      key: timestamp
+    frame_index:
+      key: frame_index
+    task_index:
+      key: task_index
+
+control_profiles:
+  abc_sim_3cam:
+    fields:
+      video:
+        keys:
+        - observation.images.top
+        - observation.images.left
+        - observation.images.right
+        key_map:
+          observation.images.top: base_0_rgb
+          observation.images.left: left_wrist_0_rgb
+          observation.images.right: right_wrist_0_rgb

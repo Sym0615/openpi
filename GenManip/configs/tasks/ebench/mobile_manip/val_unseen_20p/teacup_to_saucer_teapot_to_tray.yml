@@ -1,0 +1,232 @@
+demonstration_configs:
+- domain_randomization: &id001
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+    rewrite_instruction: false
+  generation_config: &id002
+    action_path:
+      mode: manual
+      actions:
+      - type: pick_and_place
+        obj1_uid:
+        - '0'
+        obj2_uid:
+        - '1'
+        position:
+        - top
+        allow_fixed_grasp: true   
+        force_fixed_grasp: true
+        # pick position
+        fixed_grasp_config:
+          translation: [0.04, 0.0, 0.0]
+        gripper_rot_config:
+          axis: x
+          angle: 90
+        # placed position
+        fixed_position: true
+        arm: auto
+        base_motion_list:
+          0:
+            - x: null
+              y: [-0.05, 0.05]
+              yaw: null
+              type: align
+            - x: 0.2
+              y: 0.0
+              yaw: 0.0
+              type: delta
+          3:
+            - x: null
+              y: [-0.05, 0.05]
+              yaw: null
+              type: align
+        motion_config:
+          post_grasp_distance: 0.2
+          post_place_distance: 0.15
+      - type: pick_and_place
+        obj1_uid:
+        - '2'
+        obj2_uid:
+        - '3'
+        position:
+        - top
+        # pick position
+        fixed_grasp_config:
+          translation: [0.01, -0.06, 0.0]
+        gripper_rot_config:
+          axis: x
+          angle: 80
+        allow_fixed_grasp: true    
+        force_fixed_grasp: true
+        # place position
+        fixed_position: true
+        fixed_position_config:     # apply delta to the final object position to be placed
+          - translation: [-0.01, 0.02, 0]
+            orientation: [1, 0, 0, 0]
+        arm: auto
+        base_motion_list:
+          0:
+            - x: null
+              y: [-0.05, 0.05]
+              yaw: null
+              type: align
+          3:
+            - x: null
+              y: [-0.05, 0.05]
+              yaw: null
+              type: align
+        motion_config:
+          pre_grasp_distance: 0.02
+          grasp_distance: -0.02
+          post_grasp_distance: 0.1
+      robot: 0
+    # reset_tcp: true
+    articulation: []
+    goal:
+    - - obj1_uid:
+        - '0'
+        obj2_uid:
+        - '1'
+        position:
+        - top
+      - obj1_uid:
+        - '2'
+        obj2_uid:
+        - '3'
+        position:
+        - top
+    mode: manual
+    planner: curobo
+  instruction: Pick up the teacup on the desk and place it into the empty saucer. Then pick up the teapot and place it into the tray.
+  layout_config: &id003
+    type: random_custom_tableset
+    in_order: true
+    custom_tableset:
+      # '0':
+      #   type: centric_range
+      #   angle_bilateral: true
+      #   angle: 0
+      #   w: 0.1
+      #   h: 0.1
+      #   buffer_size: 0.0
+      '0':
+        random_range_x: -0.3
+        random_range_y: -0.0
+        random_range_w: 0.2
+        random_range_h: 0.2
+        random_range_angle: 15
+        additional_height: 0.01
+        # orientation: [0.53383, 0.0, 0.0 , 0.84559]
+        # reset_orientation: true
+        buffer_size: 0.01
+        type: global_range
+      # '1':
+      #   type: centric_range
+      #   angle_bilateral: true
+      #   angle: 0
+      #   w: 0.01
+      #   h: 0.01
+      #   buffer_size: 0.0
+      # '2':
+      #   type: centric_range
+      #   angle_bilateral: true
+      #   angle: 0
+      #   w: 0.1
+      #   h: 0.1
+      #   buffer_size: 0.0
+      '2':
+        random_range_x: -0.3
+        random_range_y: -0.15
+        random_range_w: 0.2
+        random_range_h: 0.2
+        random_range_angle: 15
+        additional_height: 0.01
+        # orientation: [1, 0, 0.0 , 0.0 ]
+        reset_orientation: true
+        buffer_size: 0.01
+        type: global_range
+      '3':
+        random_range_x: -0.4
+        random_range_y: 0.1
+        random_range_w: 0.3
+        random_range_h: 0.4
+        random_range_angle: 15
+        additional_height: 0.01
+        # orientation: [1, 0, 0.0 , 0.0 ]
+        # reset_orientation: true
+        buffer_size: 0.01
+        type: global_range
+  mode: manual
+  num_episode: 400
+  object_config: &id004
+    # '0':
+    #   type: existed_object
+    #   uid_list:
+    #   - '_02'
+    '0':
+      type: load_object_from_path
+      filter_rule: []
+      max_cached_num: 10
+      path: "regex:^object_usds/custom_usd/ebench_usds/cup/ready/.*\\.usd$"
+      relative_scale: 0.5
+      option:
+      - plain_replace
+      without_colliders: false
+    '1':
+      type: existed_object
+      uid_list:
+      - '_03'
+    # '2':
+    #   type: existed_object
+    #   uid_list:
+    #   - '_01'
+    '2':
+      type: load_object_from_path
+      filter_rule: []
+      max_cached_num: 10
+      path: "regex:^object_usds/custom_usd/ebench_usds/teapot/ready/.*\\.usd$"
+      relative_scale: 0.6
+      option:
+      - plain_replace
+      without_colliders: false
+    '3':
+      type: existed_object
+      uid_list:
+      - '0'
+  preprocess_config: 
+  - &id005
+    config:
+      config: default
+      type: convexDecomposition
+    type: collider
+  robots:
+  - &id006
+    type: manip/lift2/R5a
+    position: [-0.97, 0.1, -0.5]  # update to fit the scene
+    # orientation: [0.70711, 0, 0, 0.70711]
+  table_uid: table
+  task_name: ebench/mobile_manip/teacup_to_saucer_teapot_to_tray
+  usd_name: scene_usds/ebench/simple_pnp/task9/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+
+evaluation_configs:
+- domain_randomization: *id001
+  num_test: 12
+  num_steps: 1000
+  robots:
+  - *id006
+  table_uid: table
+  task_name: ebench/mobile_manip/teacup_to_saucer_teapot_to_tray_val_unseen_20p
+  usd_name: scene_usds/ebench/simple_pnp/task9/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

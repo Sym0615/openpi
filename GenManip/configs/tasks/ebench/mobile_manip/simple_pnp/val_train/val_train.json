@@ -1,0 +1,12 @@
+[
+    "ebench/mobile_manip/val_train/utensils_to_holder.yml",
+    "ebench/mobile_manip/val_train/bookmark_on_book.yml",
+    "ebench/mobile_manip/val_train/soap_to_dish.yml",
+    "ebench/mobile_manip/val_train/apple_to_fruit_bowl.yml",
+    "ebench/mobile_manip/val_train/remote_to_holder.yml",
+    "ebench/mobile_manip/val_train/perfume_to_cosmetics_rack.yml",
+    "ebench/mobile_manip/val_train/salt_to_spice_rack.yml",
+    "ebench/mobile_manip/val_train/apple_from_shelf.yml",
+    "ebench/mobile_manip/val_train/teacup_to_saucer_teapot_to_tray.yml",
+    "ebench/mobile_manip/val_train/bowl_to_plate.yml"
+]

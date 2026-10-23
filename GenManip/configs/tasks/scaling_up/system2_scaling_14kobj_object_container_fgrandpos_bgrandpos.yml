@@ -1,0 +1,74 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_robotiq.yml
+      type: fixed
+    object_data_path: objaverse_annotation_refined_pnp
+    random_environment:
+      has_wall: true
+      hdr: true
+      robot_base_position: true
+      robot_eepose: false
+      table_texture: true
+      table_type: true
+      wall_texture: true
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: auto
+      robot: 0
+    articulation: []
+    goal:
+    - - obj1_uid:
+        - obj1_0
+        obj2_uid:
+        - obj2
+        position:
+        - top
+    mode: random_all
+    planner: curobo
+  instruction: ''
+  layout_config:
+    ignored_objects: []
+    type: random_all
+  mode: manual
+  num_episode: 100000000
+  object_config:
+    background_0: &id001
+      filter_rule:
+      - retrieve_scale_less_than_0.5
+      max_cached_num: 10
+      path: object_usds/objaverse_usd
+      type: load_object_from_path
+    background_1: *id001
+    background_2: *id001
+    obj1_0:
+      filter_rule:
+      - can_grasp
+      - retrieve_scale_less_than_0.5
+      max_cached_num: 10
+      path: object_usds/objaverse_usd
+      type: load_object_from_path
+    obj2:
+      filter_rule:
+      - is_container
+      - retrieve_scale_less_than_0.5
+      max_cached_num: 10
+      option:
+      - force_top
+      path: object_usds/objaverse_usd
+      type: load_object_from_path
+  preprocess_config:
+  - config:
+      type: ccd
+    type: ccd
+  - config:
+      config: default
+      type: convexDecomposition
+    type: collider
+  robots:
+  - type: manip/franka/robotiq
+  table_uid: aa49db8a801d402dac6cf1579536502c
+  task_name: system2_scaling_14kobj_object_container_fgrandpos_bgrandpos
+  usd_name: scene_usds/base_scenes/base
+evaluation_configs: []

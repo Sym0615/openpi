@@ -1,0 +1,234 @@
+demonstration_configs:
+- domain_randomization: &id001
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+    rewrite_instruction: false
+  generation_config: &id002
+    action_path:
+      mode: manual
+      actions:
+      - type: move_to
+        move_type: align
+        rel_object_uid: '0'
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            type: object_frame
+            rel_object_uid: '0'
+            translation: [0.006696212456925643, 0.1537908534724607, 0.004178804285727422]
+            orientation: [0.711175419999781, -0.041944497861731024, -0.0020411420204687817, -0.7017592285296392]
+            grasp: false
+            cnt: 500
+          - name: right
+            type: object_frame
+            rel_object_uid: '0'
+            translation: [0.006696212456925643, 0.1537908534724607, 0.004178804285727422]
+            orientation: [0.711175419999781, -0.041944497861731024, -0.0020411420204687817, -0.7017592285296392]
+            grasp: true
+            cnt: 10
+          - name: right
+            type: object_frame
+            rel_object_uid: '0'
+            translation: [0.05052627842132851, 0.2553865682140377, 0.010582298467350648]
+            orientation: [-0.637526824593614, 0.09083134496024897, 0.012958668779657078, 0.764945284056157]
+            grasp: true
+            # cnt: 300
+      - type: move_to
+        move_type: align
+        rel_object_uid: '2'
+        arm: right
+        delta_position:
+          x: null
+          y: 0
+          yaw: null
+        grasp: true
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            type: object_frame
+            rel_object_uid: '2'
+            translation: [0.025060746435041192, 0.15452572066282244, 0.0117466460316528654]
+            orientation: [-0.637526824593614, 0.09083134496024897, 0.012958668779657078, 0.764945284056157]
+            grasp: true
+            cnt: 300
+          - name: right
+            type: object_frame
+            rel_object_uid: '2'
+            translation: [0.05052627842132851, 0.2553865682140377, 0.010582298467350648]
+            orientation: [-0.637526824593614, 0.09083134496024897, 0.012958668779657078, 0.764945284056157]
+            grasp: false
+      # fork
+      - type: move_to
+        move_type: align
+        rel_object_uid: '1'
+        arm: right
+        delta_position:
+          x: null
+          y: 0.0
+          yaw: null
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            type: object_frame
+            rel_object_uid: '1'
+            translation: [0.006696212456925643, 0.1537908534724607, 0.004178804285727422]
+            orientation: [0.711175419999781, -0.041944497861731024, -0.0020411420204687817, -0.7017592285296392]
+            grasp: false
+            cnt: 300
+          - name: right
+            type: object_frame
+            rel_object_uid: '1'
+            translation: [0.006696212456925643, 0.1537908534724607, 0.004178804285727422]
+            orientation: [0.711175419999781, -0.041944497861731024, -0.0020411420204687817, -0.7017592285296392]
+            grasp: true
+            cnt: 10
+          - name: right
+            type: object_frame
+            rel_object_uid: '1'
+            translation: [0.05052627842132851, 0.2553865682140377, 0.010582298467350648]
+            orientation: [-0.637526824593614, 0.09083134496024897, 0.012958668779657078, 0.764945284056157]
+            grasp: true
+            # cnt: 300
+      - type: move_to
+        move_type: align
+        rel_object_uid: '2'
+        arm: right
+        delta_position:
+          x: null
+          y: 0
+          yaw: null
+        grasp: true
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            type: object_frame
+            rel_object_uid: '2'
+            translation: [0.025060746435041192, 0.15452572066282244, 0.0117466460316528654]
+            orientation: [-0.637526824593614, 0.09083134496024897, 0.012958668779657078, 0.764945284056157]
+            grasp: true
+            # cnt: 300
+          - name: right
+            type: object_frame
+            rel_object_uid: '2'
+            translation: [0.05052627842132851, 0.2553865682140377, 0.010582298467350648]
+            orientation: [-0.637526824593614, 0.09083134496024897, 0.012958668779657078, 0.764945284056157]
+            grasp: false
+      robot: 0
+    articulation: []
+    goal:
+    - - obj1_uid:
+        - '0'
+        obj2_uid:
+        - '2'
+        position:
+        - top
+      - obj1_uid:
+        - '1'
+        obj2_uid:
+        - '2'
+        position:
+        - top
+    mode: manual
+    planner: curobo
+  instruction: Pick up the fork and spoon from the countertop and place them into the utensil holder.
+  layout_config: &id003
+    type: random_custom_tableset
+    in_order: true
+    custom_tableset:
+      '0':
+        random_range_x: 0.4
+        random_range_y: -1.3
+        random_range_w: 0.5
+        random_range_h: 0.15
+        random_range_angle: 15
+        additional_height: 0.01
+        reset_orientation: true
+        orientation: [0.43, 0.56, 0.43, 0.56]
+        buffer_size: 0.03
+        type: global_range
+      # 0:
+      #   pos_x: 0.7
+      #   pos_y: -1.2
+      #   pos_z: 0.1
+      #   additional_height: 0
+      #   random_range_angle: 0
+      #   orientation: [0.43, 0.56, 0.43, 0.56]
+      #   reset_orientation: true
+      #   type: fixed_global_range
+      '1':
+        random_range_x: 0.4
+        random_range_y: -1.3
+        random_range_w: 0.5
+        random_range_h: 0.15
+        random_range_angle: 15
+        additional_height: 0.01
+        reset_orientation: true
+        orientation: [0.43, 0.56, 0.43, 0.56]
+        buffer_size: 0.03
+        type: global_range
+  mode: manual
+  num_episode: 400
+  object_config: &id004
+    '0':
+      type: load_object_from_path
+      filter_rule: []
+      max_cached_num: 10
+      path: "regex:^object_usds/custom_usd/ebench_usds/spoon/ready/.*\\.usd$"
+      relative_scale: 0.7
+      option:
+      - plain_replace
+      without_colliders: false
+    '1':
+      type: load_object_from_path
+      filter_rule: []
+      max_cached_num: 10
+      path: "regex:^object_usds/custom_usd/ebench_usds/fork/ready/.*\\.usd$"
+      relative_scale: 0.5
+      option:
+      - plain_replace
+      without_colliders: false
+    '2':
+      type: existed_object
+      uid_list:
+      - '04'
+  preprocess_config: []
+  robots:
+  - &id006
+    type: manip/lift2/R5a
+    position: [0.27, -1.75, -0.5]  # update to fit the scene
+    orientation: [0.70711, 0, 0, 0.70711]
+  table_uid: table
+  task_name: ebench/mobile_manip/utensils_to_holder
+  usd_name: scene_usds/ebench/simple_pnp/task1/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+
+evaluation_configs:
+- domain_randomization: *id001
+  num_test: 12
+  num_steps: 1000
+  robots:
+  - *id006
+  table_uid: table
+  task_name: ebench/mobile_manip/utensils_to_holder_val_unseen_20p
+  usd_name: scene_usds/ebench/simple_pnp/task1/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

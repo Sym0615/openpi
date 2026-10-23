@@ -1,0 +1,10 @@
+__pycache__
+polygons.png
+/tmp
+/saved
+.vscode
+logs/
+*.egg-info/
+AGENTS.md
+CLAUDE.md
+client_results/*

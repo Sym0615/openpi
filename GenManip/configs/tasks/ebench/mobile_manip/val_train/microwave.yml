@@ -1,0 +1,435 @@
+demonstration_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+    random_environment:
+      has_wall: false
+      hdr: false
+      robot_base_position: false
+      robot_eepose: false
+      table_texture: false
+      table_type: false
+      wall_texture: false
+      random_visuals:
+      - prim_path: /World/_scene/room/Meshes/BaseAnimation/cabinet/model_320d837652cbcd6a13d8e95775c92cb0_0/Looks/_dce846e51adf500011d9972_index31494/Num6038c1ca5b896900015bfe2e
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+      - prim_path: /World/_scene/room/Meshes/BaseAnimation/cabinet/model_320d837652cbcd6a13d8e95775c92cb0_0/Looks/_dce846e51adf500011d9972_index31447/Num6038c1ca5b896900015bfe2e
+        type: mdl
+        assets_pattern: miscs/mdl/ebench/mdl/table/train/.*\.mdl$
+    rewrite_instruction: false
+  generation_config:
+    action_path:
+      mode: manual
+      actions:
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.0891
+            - -0.3179
+            - 0.0302
+            orientation:
+            - 0.7071
+            - 0.0
+            - 0.0
+            - 0.7071
+            grasp: false
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0891
+            - -0.2779
+            - 0.0302
+            orientation:
+            - 0.7071
+            - 0.0
+            - 0.0
+            - 0.7071
+            grasp: false
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            cnt: 15
+            grasp: true
+            type: pending
+          - name: right
+            translation:
+            - 0.0891
+            - -0.3119
+            - 0.0302
+            orientation:
+            - 0.7071
+            - 0.0
+            - 0.0
+            - 0.7071
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - 0.0891
+            - -0.3519
+            - 0.1302
+            orientation:
+            - 0.7071
+            - 0.0
+            - 0.0
+            - 0.7071
+            grasp: false
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            translation:
+            - 0.064
+            - -0.111
+            - 0.2586
+            orientation:
+            - 0.0
+            - -0.7071
+            - 0.0
+            - 0.7071
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - 0.064
+            - -0.111
+            - 0.1939
+            orientation:
+            - 0.0
+            - -0.7071
+            - 0.0
+            - 0.7071
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - -0.04
+            - -0.2818
+            - 0.1939
+            orientation:
+            - 0.0
+            - -0.7071
+            - 0.0
+            - 0.7071
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.137
+            - 0.085
+            orientation:
+            - 0.2056795402616371
+            - -0.6705473308373396
+            - 0.6891100511704108
+            - 0.18217996926279972
+            grasp: false
+            rel_object_uid: eggtart2
+            type: object_frame
+          - name: right
+            grasp: true
+            cnt: 15
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.198
+            - 0.085
+            orientation:
+            - 0.2056794874430935
+            - -0.6705472997613288
+            - 0.6891102050391927
+            - 0.18217956125421675
+            grasp: true
+            rel_object_uid: eggtart2
+            type: object_frame
+          - name: right
+            translation:
+            - 0.03308582315197128
+            - -0.16093671327442216
+            - 0.056420951868233093
+            orientation:
+            - 0.5333113438788039
+            - -0.18110167774472377
+            - 0.12919568521960492
+            - 0.8161431661962668
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.3
+            orientation:
+            - 0.707
+            - 0.0
+            - 0.707
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+          - name: right
+            translation:
+            - 0.0
+            - 0.137
+            - 0.085
+            orientation:
+            - 0.2056795402616371
+            - -0.6705473308373396
+            - 0.6891100511704108
+            - 0.18217996926279972
+            grasp: false
+            rel_object_uid: eggtart1
+            type: object_frame
+          - name: right
+            grasp: true
+            cnt: 15
+            type: pending
+          - name: right
+            translation:
+            - 0.0
+            - 0.198
+            - 0.085
+            orientation:
+            - 0.2056794874430935
+            - -0.6705472997613288
+            - 0.6891102050391927
+            - 0.18217956125421675
+            grasp: true
+            rel_object_uid: eggtart1
+            type: object_frame
+          - name: right
+            translation:
+            - 0.03308582315197128
+            - -0.16093671327442216
+            - 0.056420951868233093
+            orientation:
+            - 0.5333113438788039
+            - -0.18110167774472377
+            - 0.12919568521960492
+            - 0.8161431661962668
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - 0.3
+            - 0.0
+            - 0.3
+            orientation:
+            - 1.0
+            - 0.0
+            - 0.0
+            - 0.0
+            grasp: false
+            rel_arm: right
+            type: robot_frame
+      - type: move_to
+        move_type: delta
+        delta_position:
+          x: 0.15
+          y: 0.0
+          yaw: 0.0
+      - type: custom_motion
+        motion_list:
+          right:
+          - name: right
+            translation:
+            - -0.15564227067524894
+            - -0.28473460696283137
+            - 0.22268581387878636
+            orientation:
+            - 3.492459128669278e-10
+            - -0.7071067806044711
+            - -3.492459128669278e-10
+            - 0.7071067817686241
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+          - name: right
+            translation:
+            - -0.003480672469682755
+            - -0.12613117716851985
+            - 0.22268581378494454
+            orientation:
+            - 3.492459128669278e-10
+            - -0.7071067806044711
+            - -3.492459128669278e-10
+            - 0.7071067817686241
+            grasp: true
+            rel_object_uid: microwave
+            type: object_frame
+      robot: 0
+    articulation: []
+    goal:
+    - - - obj1_uid: microwave
+          status:
+          - - - - -2.0
+                - -1.1
+              - - -1e8
+                - 1e8
+    - - - obj1_uid: microwave
+          status:
+          - - - - -0.2
+                - 0.05
+              - - -1e8
+                - 1e8
+        - obj1_uid:
+          - eggtart1
+          obj2_uid:
+          - plate
+          position:
+          - top
+        - obj1_uid:
+          - eggtart2
+          obj2_uid:
+          - plate
+          position:
+          - top
+    mode: manual
+    planner: curobo
+  instruction: Heat the eggtart with the microwave.
+  layout_config:
+    ignored_objects: []
+    type: random_custom_tableset
+    custom_tableset:
+    - eggtart1:
+        w: 0.15
+        h: 0.15
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+      eggtart2:
+        w: 0.15
+        h: 0.15
+        angle: 0
+        angle_bilateral: false
+        type: centric_range
+  mode: manual
+  num_episode: 250
+  object_config:
+    eggtart1:
+      type: existed_object
+      uid_list:
+      - '02'
+      is_not_rigid: true
+      without_colliders: true
+    eggtart2:
+      type: existed_object
+      uid_list:
+      - '03'
+      is_not_rigid: true
+      without_colliders: true
+    microwave:
+      type: existed_object
+      uid_list:
+      - microwave
+      is_articulated: true
+      articulation_info:
+        is_articulated: true
+        part:
+          group_0: /group_0
+          group_1: /group_1
+          group_2: /group_2
+    plate:
+      type: existed_object
+      uid_list:
+      - '00'
+      is_not_rigid: true
+      without_colliders: true
+    box:
+      type: existed_object
+      uid_list:
+      - '01'
+      is_not_rigid: true
+      without_colliders: true
+  preprocess_config: []
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 1.0
+    - -2.65
+    - -0.6
+    orientation:
+    - 0.70711
+    - 0.0
+    - 0.0
+    - 0.70711
+  table_uid: table
+  task_name: ebench/mobile_manip/microwave
+  usd_name: scene_usds/ebench/long_horizon/scene_microwave/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"
+evaluation_configs:
+- domain_randomization:
+    cameras:
+      config_path: configs/cameras/fixed_camera_lift2_simbox.yml
+      type: fixed
+  num_test: 5
+  num_steps: 3000
+  object_config:
+    microwave:
+      type: existed_object
+      uid_list:
+      - microwave
+      is_articulated: true
+      articulation_info:
+        is_articulated: true
+        part:
+          group_0: /group_0
+          group_1: /group_1
+          group_2: /group_2
+  robots:
+  - type: manip/lift2/R5a
+    position:
+    - 1.0
+    - -2.65
+    - -0.6
+    orientation:
+    - 0.70711
+    - 0.0
+    - 0.0
+    - 0.70711
+  table_uid: table
+  task_name: ebench/mobile_manip/microwave_val_train
+  usd_name: scene_usds/ebench/long_horizon/scene_microwave/scene
+  env_vars:
+    MDL_SYSTEM_PATH: "/isaac-sim/materials/:{ASSETS_DIR}/miscs/mdl/ebench/mdl:{ASSETS_DIR}/scene_usds/ebench/simple_pnp/task3/SubUSDs/materials"

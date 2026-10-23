@@ -1,0 +1,21 @@
+[
+    "ebench/mobile_manip/test_mini/apple_from_shelf.yml",
+    "ebench/mobile_manip/test_mini/apple_to_fruit_bowl.yml",
+    "ebench/mobile_manip/test_mini/bookmark_on_book.yml",
+    "ebench/mobile_manip/test_mini/bottle.yml",
+    "ebench/mobile_manip/test_mini/bowl_to_plate.yml",
+    "ebench/mobile_manip/test_mini/detergent.yml",
+    "ebench/mobile_manip/test_mini/dish.yml",
+    "ebench/mobile_manip/test_mini/dishwasher.yml",
+    "ebench/mobile_manip/test_mini/fruit.yml",
+    "ebench/mobile_manip/test_mini/make_sandwich.yml",
+    "ebench/mobile_manip/test_mini/microwave.yml",
+    "ebench/mobile_manip/test_mini/pen.yml",
+    "ebench/mobile_manip/test_mini/perfume_to_cosmetics_rack.yml",
+    "ebench/mobile_manip/test_mini/remote_to_holder.yml",
+    "ebench/mobile_manip/test_mini/salt_to_spice_rack.yml",
+    "ebench/mobile_manip/test_mini/shop.yml",
+    "ebench/mobile_manip/test_mini/soap_to_dish.yml",
+    "ebench/mobile_manip/test_mini/teacup_to_saucer_teapot_to_tray.yml",
+    "ebench/mobile_manip/test_mini/utensils_to_holder.yml"
+]

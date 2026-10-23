@@ -1,0 +1,5 @@
+[
+    "ebench/mobile_manip/val_train/val_train.json",
+    "ebench/mobile_manip/val_unseen/val_unseen.json",
+    "ebench/mobile_manip/test_mini/test_mini.json"
+]
